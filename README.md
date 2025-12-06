@@ -1,4 +1,4 @@
-# ESP32 Breathalyzer
+# (WIP) ESP32 Breathalyzer
 An alcohol breath measurement system built around the ESP32-S3.
 
 This project began as a group assignment in a electronic project course.  
