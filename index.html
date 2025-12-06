@@ -1,1 +1,1323 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WiFi Alkomätare</title>
+
+  <style>
+    :root {
+      --bg: #050816;
+      --bg-elevated: #0b1020;
+      --bg-soft: #131933;
+      --accent: #4f46e5;
+      --accent-soft: rgba(79, 70, 229, 0.1);
+      --accent-strong: rgba(79, 70, 229, 0.35);
+      --text: #e5e7eb;
+      --text-muted: #9ca3af;
+      --danger: #ef4444;
+      --success: #22c55e;
+      --border: #1f2937;
+      --radius-xl: 1.25rem;
+      --shadow-soft: 0 18px 45px rgba(0, 0, 0, 0.55);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+    }
+
+    body {
+      background: radial-gradient(circle at top, #111827 0, #020617 45%);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      padding: 16px;
+    }
+
+    .app {
+      width: 100%;
+      max-width: 1100px;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+      gap: 12px;
+    }
+
+    .title-group h1 {
+      font-size: 1.5rem;
+      letter-spacing: 0.03em;
+    }
+
+    .title-group p {
+      color: var(--text-muted);
+      font-size: 0.9rem;
+    }
+
+    .badge {
+      padding: 6px 12px;
+      border-radius: 999px;
+      font-size: 0.8rem;
+      border: 1px solid var(--accent-soft);
+      background: radial-gradient(circle at top left, var(--accent-soft), transparent);
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .badge-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: #22c55e;
+      box-shadow: 0 0 10px rgba(34, 197, 94, 0.9);
+    }
+
+    main.layout {
+      display: grid;
+      grid-template-columns: minmax(0, 2.1fr) minmax(0, 1.4fr);
+      gap: 16px;
+    }
+
+    @media (max-width: 840px) {
+      main.layout {
+        grid-template-columns: minmax(0, 1fr);
+      }
+    }
+
+    .panel {
+      background: linear-gradient(145deg, #020617, #020617 50%, #020617 55%, #020617);
+      border-radius: var(--radius-xl);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow-soft);
+      padding: 14px 14px 16px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .panel::before {
+      content: "";
+      position: absolute;
+      inset: -40%;
+      opacity: 0.25;
+      background:
+        radial-gradient(circle at 10% 0%, rgba(79, 70, 229, 0.3), transparent 50%),
+        radial-gradient(circle at 90% 0%, rgba(14, 165, 233, 0.25), transparent 45%);
+      pointer-events: none;
+      mix-blend-mode: screen;
+    }
+
+    .panel-inner {
+      position: relative;
+      z-index: 1;
+    }
+
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 10px;
+      gap: 8px;
+    }
+
+    .panel-header h2 {
+      font-size: 1.05rem;
+      font-weight: 600;
+    }
+
+    .panel-header span {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    .chip {
+      font-size: 0.75rem;
+      padding: 4px 9px;
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .live-stats {
+      display: grid;
+      grid-template-columns: 1.3fr 1fr;
+      gap: 10px;
+      margin-bottom: 14px;
+      align-items: stretch;
+    }
+
+    @media (max-width: 600px) {
+      .live-stats {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .card {
+      background: radial-gradient(circle at top left, rgba(15, 23, 42, 0.9), rgba(3, 7, 18, 0.95));
+      border-radius: 1rem;
+      border: 1px solid rgba(31, 41, 55, 0.9);
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 4px;
+      min-height: 75px;
+    }
+
+    .card-label {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 8px;
+    }
+
+    .card-main-value {
+      font-size: 1.8rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+    }
+
+    .card-sub {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: rgba(22, 163, 74, 0.12);
+      border: 1px solid rgba(34, 197, 94, 0.25);
+      font-size: 0.7rem;
+      color: #bbf7d0;
+    }
+
+    .small-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background: #22c55e;
+    }
+
+    .chart-container {
+      margin-top: 4px;
+      border-radius: 0.9rem;
+      background: radial-gradient(circle at top, rgba(15, 23, 42, 0.9), rgba(3, 7, 18, 0.95));
+      border: 1px solid rgba(31, 41, 55, 0.9);
+      padding: 8px 10px 10px;
+    }
+
+    .chart-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 4px;
+      gap: 8px;
+    }
+
+    .chart-header span {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    .legend-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+
+    canvas {
+      width: 100% !important;
+      height: 230px !important;
+    }
+
+    .section {
+      margin-bottom: 14px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid rgba(31, 41, 55, 0.85);
+    }
+
+    .section:last-child {
+      border-bottom: none;
+      padding-bottom: 0;
+      margin-bottom: 0;
+    }
+
+    .section-title {
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+    }
+
+    .field-group {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-bottom: 8px;
+    }
+
+    label {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    select,
+    input[type="text"],
+    input[type="number"],
+    input[type="password"],
+    input[type="color"] {
+      width: 100%;
+      padding: 6px 9px;
+      border-radius: 0.6rem;
+      border: 1px solid rgba(55, 65, 81, 0.9);
+      background: rgba(15, 23, 42, 0.95);
+      color: var(--text);
+      font-size: 0.85rem;
+      outline: none;
+    }
+
+    select:focus,
+    input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px rgba(79, 70, 229, 0.4);
+    }
+
+    .inline-fields {
+      display: flex;
+      gap: 6px;
+    }
+
+    .inline-fields > * {
+      flex: 1;
+    }
+
+    button {
+      border-radius: 0.7rem;
+      border: 1px solid transparent;
+      background: linear-gradient(135deg, var(--accent), #6366f1);
+      color: white;
+      font-size: 0.85rem;
+      font-weight: 500;
+      padding: 7px 10px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: transform 0.08s ease, box-shadow 0.08s ease, filter 0.08s ease;
+      box-shadow: 0 10px 25px rgba(79, 70, 229, 0.45);
+      white-space: nowrap;
+    }
+
+    button:hover {
+      filter: brightness(1.05);
+      transform: translateY(-1px);
+      box-shadow: 0 14px 35px rgba(79, 70, 229, 0.65);
+    }
+
+    button:active {
+      transform: translateY(0);
+      box-shadow: 0 8px 18px rgba(79, 70, 229, 0.55);
+    }
+
+    button.secondary {
+      background: rgba(15, 23, 42, 0.95);
+      border-color: rgba(55, 65, 81, 0.9);
+      box-shadow: none;
+      color: var(--text-muted);
+    }
+
+    button.secondary:hover {
+      filter: none;
+      border-color: var(--accent);
+      color: var(--text);
+      box-shadow: 0 6px 16px rgba(15, 23, 42, 0.9);
+    }
+
+    button.danger {
+      background: linear-gradient(135deg, #b91c1c, #ef4444);
+      box-shadow: 0 10px 25px rgba(248, 113, 113, 0.35);
+    }
+
+    .btn-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 4px;
+    }
+
+    .muted {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    .table-wrapper {
+      max-height: 190px;
+      overflow: auto;
+      border-radius: 0.7rem;
+      border: 1px solid rgba(31, 41, 55, 0.9);
+      background: rgba(3, 7, 18, 0.9);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.78rem;
+    }
+
+    thead {
+      position: sticky;
+      top: 0;
+      background: rgba(15, 23, 42, 0.98);
+      z-index: 2;
+    }
+
+    th,
+    td {
+      padding: 5px 7px;
+      text-align: left;
+      border-bottom: 1px solid rgba(31, 41, 55, 0.75);
+      white-space: nowrap;
+    }
+
+    th {
+      font-weight: 500;
+      color: var(--text-muted);
+    }
+
+    tbody tr:last-child td {
+      border-bottom: none;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      border-radius: 999px;
+      padding: 2px 7px;
+      font-size: 0.72rem;
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid rgba(55, 65, 81, 0.9);
+    }
+
+    .tag-color {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(15, 23, 42, 0.7);
+    }
+
+    .admin-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+
+    .admin-info {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .admin-panel {
+      margin-top: 6px;
+      padding: 8px;
+      border-radius: 0.8rem;
+      background: radial-gradient(circle at top left, rgba(79, 70, 229, 0.08), rgba(15, 23, 42, 0.95));
+      border: 1px solid rgba(55, 65, 81, 0.9);
+      display: none;
+    }
+
+    .admin-panel.visible {
+      display: block;
+    }
+
+    .badge-admin {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      color: #f97316;
+    }
+
+    .admin-section {
+      margin-top: 6px;
+      padding-top: 6px;
+      border-top: 1px dashed rgba(55, 65, 81, 0.8);
+    }
+
+    .admin-user-filters {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 4px;
+    }
+
+    .admin-user-filters label {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 0.78rem;
+      padding: 3px 7px;
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid rgba(55, 65, 81, 0.9);
+      cursor: pointer;
+    }
+
+    .admin-user-filters input[type="checkbox"] {
+      accent-color: var(--accent);
+    }
+
+    .user-stats-header {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+    }
+
+    .user-stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 8px;
+      margin-top: 6px;
+    }
+
+    .user-stat-card {
+      background: radial-gradient(circle at top left, rgba(15, 23, 42, 0.9), rgba(3, 7, 18, 0.95));
+      border-radius: 0.9rem;
+      border: 1px solid rgba(31, 41, 55, 0.9);
+      padding: 8px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-height: 56px;
+    }
+
+    .user-stat-label {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .user-stat-value {
+      font-size: 0.95rem;
+      font-weight: 500;
+    }
+
+    .user-stat-sub {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+    }
+
+    .user-stats-empty {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      padding: 8px 10px;
+      border-radius: 0.7rem;
+      border: 1px dashed rgba(55, 65, 81, 0.9);
+      background: rgba(15, 23, 42, 0.7);
+      margin-top: 4px;
+    }
+
+    .trend-positive { color: #22c55e; }
+    .trend-negative { color: #ef4444; }
+    .trend-neutral  { color: #e5e7eb; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div class="title-group">
+        <h1>WiFi Alkomätare</h1>
+        <p>Live-mätningar per användare, loggade på ESP32 & export som CSV.</p>
+      </div>
+      <div>
+        <div class="badge">
+          <span class="badge-dot"></span>
+          <span id="battery-status">ESP32-S3 • Access Point</span>
+        </div>
+      </div>
+    </header>
+
+    <main class="layout">
+      <!-- Vänster: Live + graf -->
+      <section class="panel">
+        <div class="panel-inner">
+          <div class="panel-header">
+            <div>
+              <h2>Live-mätning</h2>
+              <span>Promille över tid</span>
+            </div>
+            <span class="chip" id="current-user-chip">Ingen aktiv användare</span>
+          </div>
+
+          <div class="live-stats">
+            <div class="card">
+              <div class="card-label">
+                <span>Aktuell promille</span>
+                <span class="pill"><span class="small-dot"></span> Senaste mätning</span>
+              </div>
+              <div class="card-main-value" id="live-value">–</div>
+              <div class="card-sub" id="live-meta">Ingen mätning ännu</div>
+            </div>
+
+            <div class="card">
+              <div class="card-label">
+                <span>Statistik (global logg)</span>
+              </div>
+              <div class="card-sub" id="session-stats">
+                0 mätningar • max – • medel –
+              </div>
+              <div class="card-sub">
+                Aktiv användare: <span id="active-user-label">Ingen</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="chart-container">
+            <div class="chart-header">
+              <span>Historik</span>
+              <span class="muted" id="dataset-legend">Inga mätningar än</span>
+            </div>
+            <canvas id="measurementChart"></canvas>
+          </div>
+        </div>
+      </section>
+
+      <!-- Höger: användare, lista, admin -->
+      <section class="panel">
+        <div class="panel-inner">
+          <div class="section">
+            <div class="section-title">Användare</div>
+
+            <div class="field-group">
+              <label for="user-select">Välj användare att visa statistik för</label>
+              <select id="user-select"></select>
+            </div>
+
+            <div class="field-group">
+              <label>Lägg till användare</label>
+              <div class="inline-fields">
+                <input type="text" id="new-user-name" placeholder="Namn (t.ex. Edvin)" />
+                <input type="color" id="new-user-color" value="#22c55e" />
+              </div>
+              <div class="btn-row">
+                <button id="add-user-btn">Lägg till</button>
+              </div>
+              <p class="muted">Varje användare får sin egen färg i grafen.</p>
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="section-title">Mätningar (hela loggen)</div>
+            <div class="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Tid</th>
+                    <th>Användare</th>
+                    <th>Promille</th>
+                  </tr>
+                </thead>
+                <tbody id="measurement-table-body"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="admin-header">
+              <div>
+                <div class="section-title">Admin</div>
+                <div class="admin-info" id="admin-status">
+                  Endast arrangörer – välj aktiv användare & hantera loggar.
+                </div>
+              </div>
+              <button class="secondary" id="toggle-admin-btn">Admin-login</button>
+            </div>
+
+            <div class="admin-panel" id="admin-panel">
+              <div class="field-group">
+                <label for="admin-password">Lösenord</label>
+                <input type="password" id="admin-password" placeholder="Adminlösen..." />
+              </div>
+              <div class="btn-row">
+                <button id="admin-confirm-btn">Aktivera admin</button>
+              </div>
+
+              <div id="admin-actions" style="display:none; margin-top:10px;">
+                <div class="badge-admin">Adminläge aktivt</div>
+
+                <div class="admin-section">
+                  <strong style="font-size:0.8rem;">Aktiv användare</strong>
+                  <p class="muted">Välj vem som blåser nu. Alla klienter ser detta.</p>
+                  <div class="field-group">
+                    <select id="active-user-select"></select>
+                  </div>
+                  <div class="btn-row">
+                    <button id="set-active-user-btn">Sätt aktiv användare</button>
+                  </div>
+                </div>
+
+                <div class="admin-section">
+                  <strong style="font-size:0.8rem;">Testmätning (debug)</strong>
+                  <p class="muted">Genererar en slumpad promille på aktiv användare.</p>
+                  <div class="btn-row">
+                    <button class="secondary" id="test-measure-btn">Testmätning</button>
+                  </div>
+                </div>
+
+                <div class="admin-section">
+                  <strong style="font-size:0.8rem;">Exportera logg</strong>
+                  <p class="muted">Bygger CSV lokalt i webbläsaren utifrån aktuell logg.</p>
+                  <div class="btn-row">
+                    <button id="download-esp-all-btn">Ladda ner alla</button>
+                  </div>
+                  <div class="field-group" style="margin-top:6px;">
+                    <label>Filtrera på användare</label>
+                    <div class="admin-user-filters" id="admin-user-filters"></div>
+                    <div class="btn-row">
+                      <button id="download-esp-filtered-btn">Ladda ner valda</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="admin-section">
+                  <strong style="font-size:0.8rem;">Rensa loggar</strong>
+                  <p class="muted">Rensar både ESP-logg och allt som visas i UI.</p>
+                  <div class="btn-row">
+                    <button class="danger" id="clear-data-btn">Rensa loggar</button>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- Användarstatistik -->
+      <section class="panel">
+        <div class="panel-inner">
+          <div class="panel-header">
+            <div>
+              <h2>Användarstatistik</h2>
+              <span>För vald användare (lokalt val)</span>
+            </div>
+          </div>
+
+          <div class="user-stats-header">
+            <span id="user-stats-user-label">Ingen användare vald.</span>
+          </div>
+
+          <div id="user-stats-empty" class="user-stats-empty">
+            Välj en användare och gör minst en mätning för att se statistik.
+          </div>
+
+          <div id="user-stats-grid" class="user-stats-grid" style="display:none;">
+            <div class="user-stat-card">
+              <div class="user-stat-label">Antal mätningar</div>
+              <div class="user-stat-value" id="user-stats-count">–</div>
+            </div>
+            <div class="user-stat-card">
+              <div class="user-stat-label">Max-värde</div>
+              <div class="user-stat-value" id="user-stats-max">–</div>
+            </div>
+            <div class="user-stat-card">
+              <div class="user-stat-label">Medelvärde</div>
+              <div class="user-stat-value" id="user-stats-avg">–</div>
+            </div>
+            <div class="user-stat-card">
+              <div class="user-stat-label">Senaste mätning</div>
+              <div class="user-stat-value" id="user-stats-last">–</div>
+              <div class="user-stat-sub" id="user-stats-last-time">Tid –</div>
+            </div>
+            <div class="user-stat-card">
+              <div class="user-stat-label">Trend</div>
+              <div class="user-stat-value" id="user-stats-trend">–</div>
+              <div class="user-stat-sub">Senaste två mätningar</div>
+            </div>
+            <div class="user-stat-card">
+              <div class="user-stat-label">Tidsperiod</div>
+              <div class="user-stat-value" id="user-stats-period">–</div>
+            </div>
+            <div class="user-stat-card">
+              <div class="user-stat-label">Plats i topplista</div>
+              <div class="user-stat-value" id="user-stats-rank">–</div>
+              <div class="user-stat-sub" id="user-stats-rank-detail"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <script src="/chart.min.js"></script>
+  <script src="/chart-adapter.min.js"></script>
+  <script>
+    const ADMIN_PASSWORD = "limpan69";
+
+    const users = [];
+    const measurements = []; // {timestamp: Date, userId, value}
+    let activeUserId = "";
+    let selectedUserId = ""; // lokal, bara denna klient
+    let ws = null;
+
+    const userSelect = document.getElementById("user-select");
+    const activeUserSelect = document.getElementById("active-user-select");
+    const currentUserChip = document.getElementById("current-user-chip");
+    const activeUserLabel = document.getElementById("active-user-label");
+
+    const newUserNameInput = document.getElementById("new-user-name");
+    const newUserColorInput = document.getElementById("new-user-color");
+    const addUserBtn = document.getElementById("add-user-btn");
+
+    const liveValueEl = document.getElementById("live-value");
+    const liveMetaEl = document.getElementById("live-meta");
+    const sessionStatsEl = document.getElementById("session-stats");
+    const measurementTableBody = document.getElementById("measurement-table-body");
+    const datasetLegendEl = document.getElementById("dataset-legend");
+
+    const toggleAdminBtn = document.getElementById("toggle-admin-btn");
+    const adminPanelEl = document.getElementById("admin-panel");
+    const adminPasswordInput = document.getElementById("admin-password");
+    const adminConfirmBtn = document.getElementById("admin-confirm-btn");
+    const adminActionsEl = document.getElementById("admin-actions");
+    const adminStatusEl = document.getElementById("admin-status");
+
+    const adminUserFiltersEl = document.getElementById("admin-user-filters");
+    const downloadEspAllBtn = document.getElementById("download-esp-all-btn");
+    const downloadEspFilteredBtn = document.getElementById("download-esp-filtered-btn");
+    const downloadSessionCsvBtn = document.getElementById("download-session-csv-btn"); // (ej använd, men kan läggas till)
+    const clearDataBtn = document.getElementById("clear-data-btn");
+    const testMeasureBtn = document.getElementById("test-measure-btn");
+    const setActiveUserBtn = document.getElementById("set-active-user-btn");
+
+    const userStatsUserLabelEl = document.getElementById("user-stats-user-label");
+    const userStatsEmptyEl = document.getElementById("user-stats-empty");
+    const userStatsGridEl = document.getElementById("user-stats-grid");
+    const userStatsCountEl = document.getElementById("user-stats-count");
+    const userStatsMaxEl = document.getElementById("user-stats-max");
+    const userStatsAvgEl = document.getElementById("user-stats-avg");
+    const userStatsLastEl = document.getElementById("user-stats-last");
+    const userStatsLastTimeEl = document.getElementById("user-stats-last-time");
+    const userStatsTrendEl = document.getElementById("user-stats-trend");
+    const userStatsPeriodEl = document.getElementById("user-stats-period");
+    const userStatsRankEl = document.getElementById("user-stats-rank");
+    const userStatsRankDetailEl = document.getElementById("user-stats-rank-detail");
+
+    function formatTime(date) {
+      const d = new Date(date);
+      const h = String(d.getHours()).padStart(2, "0");
+      const m = String(d.getMinutes()).padStart(2, "0");
+      const s = String(d.getSeconds()).padStart(2, "0");
+      return `${h}:${m}:${s}`;
+    }
+
+    function getUserById(id) {
+      return users.find(u => u.id === id) || null;
+    }
+
+    function wsSend(obj) {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        alert("Ingen kontakt med ESP (WebSocket ej ansluten).");
+        return false;
+      }
+      ws.send(JSON.stringify(obj));
+      return true;
+    }
+
+    const chartCtx = document.getElementById("measurementChart").getContext("2d");
+    const measurementChart = new Chart(chartCtx, {
+      type: "line",
+      data: { datasets: [] },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          x: {
+            type: "time",
+            time: { displayFormats: { second: "HH:mm:ss" } },
+            ticks: { color: "#9ca3af" },
+            grid: { color: "rgba(55,65,81,0.6)" }
+          },
+          y: {
+            ticks: { color: "#9ca3af" },
+            grid: { color: "rgba(55,65,81,0.6)" }
+          }
+        },
+        plugins: { legend: { display: false } },
+        elements: {
+          line: { tension: 0.25 },
+          point: { radius: 2, hoverRadius: 4 }
+        }
+      }
+    });
+
+    function ensureDataset(u) {
+      let ds = measurementChart.data.datasets.find(d => d.userId === u.id);
+      if (!ds) {
+        ds = {
+          label: u.name,
+          userId: u.id,
+          data: [],
+          borderColor: u.color,
+          backgroundColor: u.color + "44",
+          borderWidth: 2,
+          pointRadius: 2
+        };
+        measurementChart.data.datasets.push(ds);
+      }
+      return ds;
+    }
+    function rebuildChartFromState() {
+      measurementChart.data.datasets = [];
+      users.forEach(u => {
+        const ds = ensureDataset(u);
+        measurements.filter(m => m.userId === u.id).forEach(m => {
+          ds.data.push({ x: m.timestamp, y: m.value });
+        });
+      });
+      measurementChart.update();
+      updateLegend();
+    }
+
+    function updateLegend() {
+      if (measurementChart.data.datasets.length === 0) {
+        datasetLegendEl.textContent = "Inga mätningar än";
+        return;
+      }
+      datasetLegendEl.innerHTML = measurementChart.data.datasets
+        .map(ds => `<span class="tag"><span class="tag-color" style="background:${ds.borderColor};"></span>${ds.label}</span>`)
+        .join(" ");
+    }
+
+    function rebuildUserSelects() {
+      const prevSelected = selectedUserId || userSelect.value;
+
+      userSelect.innerHTML = "";
+      activeUserSelect.innerHTML = "";
+
+      if (users.length === 0) {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "Inga användare";
+        userSelect.appendChild(opt);
+        const opt2 = document.createElement("option");
+        opt2.value = "";
+        opt2.textContent = "Inga användare";
+        activeUserSelect.appendChild(opt2);
+      } else {
+        users.forEach(u => {
+          const a = document.createElement("option");
+          a.value = u.id;
+          a.textContent = u.name;
+          userSelect.appendChild(a);
+
+          const b = document.createElement("option");
+          b.value = u.id;
+          b.textContent = u.name;
+          activeUserSelect.appendChild(b);
+        });
+      }
+
+      if (prevSelected && users.some(u => u.id === prevSelected)) {
+        selectedUserId = prevSelected;
+      } else if (users.length > 0) {
+        selectedUserId = users[0].id;
+      } else {
+        selectedUserId = "";
+      }
+
+      userSelect.value = selectedUserId || "";
+      activeUserSelect.value = activeUserId || "";
+      updateActiveUserUI();
+      rebuildAdminUserFilters();
+      updateUserStats();
+    }
+
+    function updateActiveUserUI() {
+      const u = getUserById(activeUserId);
+      if (!u) {
+        currentUserChip.textContent = "Ingen aktiv användare";
+        activeUserLabel.textContent = "Ingen";
+      } else {
+        currentUserChip.innerHTML = `<span class="legend-dot" style="background:${u.color};"></span>${u.name}`;
+        activeUserLabel.textContent = u.name;
+      }
+    }
+
+    function rebuildAdminUserFilters() {
+      adminUserFiltersEl.innerHTML = "";
+      users.forEach(u => {
+        const id = `admin-filter-${u.id}`;
+        const label = document.createElement("label");
+        label.htmlFor = id;
+        label.innerHTML = `
+          <input type="checkbox" id="${id}" value="${u.id}">
+          <span class="tag-color" style="background:${u.color};"></span>
+          ${u.name}
+        `;
+        adminUserFiltersEl.appendChild(label);
+      });
+    }
+
+    function appendMeasurementRow(m) {
+      const u = getUserById(m.userId);
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${formatTime(m.timestamp)}</td>
+        <td>${u ? u.name : "Okänd"}</td>
+        <td>${m.value.toFixed(3)}‰</td>
+      `;
+      measurementTableBody.appendChild(tr);
+    }
+
+    function rebuildMeasurementTable() {
+      measurementTableBody.innerHTML = "";
+      measurements.forEach(appendMeasurementRow);
+    }
+
+    function updateStats() {
+      if (measurements.length === 0) {
+        sessionStatsEl.textContent = "0 mätningar • max – • medel –";
+        return;
+      }
+      let sum = 0;
+      let maxVal = -Infinity;
+      measurements.forEach(m => {
+        sum += m.value;
+        if (m.value > maxVal) maxVal = m.value;
+      });
+      const avg = sum / measurements.length;
+      sessionStatsEl.textContent =
+        `${measurements.length} mätningar • max ${maxVal.toFixed(3)}‰ • medel ${avg.toFixed(3)}‰`;
+    }
+
+    function updateUserStats() {
+      const id = selectedUserId;
+      const user = getUserById(id);
+
+      if (!user) {
+        userStatsUserLabelEl.textContent = "Ingen användare vald.";
+        userStatsEmptyEl.style.display = "block";
+        userStatsGridEl.style.display = "none";
+        return;
+      }
+
+      userStatsUserLabelEl.textContent = `Statistik för ${user.name}`;
+      const list = measurements.filter(m => m.userId === user.id);
+
+      if (list.length === 0) {
+        userStatsEmptyEl.style.display = "block";
+        userStatsGridEl.style.display = "none";
+        return;
+      }
+
+      userStatsEmptyEl.style.display = "none";
+      userStatsGridEl.style.display = "grid";
+
+      const count = list.length;
+      const maxVal = Math.max(...list.map(m => m.value));
+      const avg = list.reduce((a, b) => a + b.value, 0) / count;
+      const last = list[list.length - 1];
+      const first = list[0];
+
+      userStatsCountEl.textContent = count;
+      userStatsMaxEl.textContent = maxVal.toFixed(3) + "‰";
+      userStatsAvgEl.textContent = avg.toFixed(3) + "‰";
+      userStatsLastEl.textContent = last.value.toFixed(3) + "‰";
+      userStatsLastTimeEl.textContent = "Tid " + formatTime(last.timestamp);
+
+      if (count < 2) {
+        userStatsTrendEl.textContent = "För få mätningar";
+        userStatsTrendEl.className = "user-stat-value trend-neutral";
+      } else {
+        const diff = last.value - list[list.length - 2].value;
+        if (diff > 0.02) {
+          userStatsTrendEl.textContent = `Stigande ↑ (+${diff.toFixed(3)}‰)`;
+          userStatsTrendEl.className = "user-stat-value trend-positive";
+        } else if (diff < -0.02) {
+          userStatsTrendEl.textContent = `Sjunkande ↓ (${diff.toFixed(3)}‰)`;
+          userStatsTrendEl.className = "user-stat-value trend-negative";
+        } else {
+          userStatsTrendEl.textContent = "Stabil ↔";
+          userStatsTrendEl.className = "user-stat-value trend-neutral";
+        }
+      }
+
+      if (first.timestamp.getTime() === last.timestamp.getTime()) {
+        userStatsPeriodEl.textContent = formatTime(first.timestamp);
+      } else {
+        userStatsPeriodEl.textContent = `${formatTime(first.timestamp)} – ${formatTime(last.timestamp)}`;
+      }
+
+      const ranking = users.map(u => {
+        const listU = measurements.filter(m => m.userId === u.id);
+        if (listU.length === 0) return null;
+        const avgU = listU.reduce((a, b) => a + b.value, 0) / listU.length;
+        return { id: u.id, avg: avgU };
+      }).filter(Boolean).sort((a, b) => b.avg - a.avg);
+
+      const idx = ranking.findIndex(r => r.id === user.id);
+      if (idx === -1) {
+        userStatsRankEl.textContent = "–";
+        userStatsRankDetailEl.textContent = "";
+      } else {
+        userStatsRankEl.textContent = `Plats ${idx + 1} av ${ranking.length}`;
+        userStatsRankDetailEl.textContent = `Medel: ${avg.toFixed(3)}‰`;
+      }
+    }
+
+    function buildCsv(filteredUserIds = null) {
+      let csv = "timestamp;time;user;value_promille\n";
+      measurements.forEach(m => {
+        if (filteredUserIds && !filteredUserIds.includes(m.userId)) return;
+        const u = getUserById(m.userId);
+        const d = m.timestamp;
+        csv += `${d.toISOString()};${formatTime(d)};${u ? u.name : "Okänd"};${m.value.toFixed(3)}\n`;
+      });
+      return csv;
+    }
+
+    function downloadCsv(filteredUserIds = null, namePrefix = "logg") {
+      if (measurements.length === 0) {
+        alert("Inga mätningar att spara.");
+        return;
+      }
+      const csv = buildCsv(filteredUserIds);
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const now = new Date();
+      a.href = url;
+      a.download = `${namePrefix}_${now.toISOString().replace(/[:T]/g, "-").slice(0, 19)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    function handleStateMessage(data) {
+  const prevSelected = selectedUserId || userSelect.value;
+
+  // --- Users ---
+  users.length = 0;
+  (data.users || []).forEach(u => users.push(u));
+
+  // --- Measurements ---
+  measurements.length = 0;
+
+  // 1) Läs in råa mätningar med "rå"-timestamp från ESP
+  const rawList = (data.measurements || []).map(m => {
+    const tsRaw = Number(m.timestamp);     // t.ex. millisekunder/sekunder sedan start
+    return {
+      raw: isNaN(tsRaw) ? null : tsRaw,
+      userId: m.userId,
+      value: Number(m.value) || 0
+    };
+  });
+
+  if (rawList.length > 0) {
+    // 2) Hitta största råa tidsvärdet (senaste mätningen)
+    const validRaw = rawList.map(r => r.raw).filter(r => r !== null);
+    let maxRaw = 0;
+    if (validRaw.length > 0) {
+      maxRaw = Math.max(...validRaw);
+    }
+
+    // 3) Sätt "nu" som referens – senaste mätningen blir nu,
+    //    äldre mätningar sprids bakåt i tiden
+    const now = Date.now();
+
+    rawList.forEach(r => {
+      let ts;
+      if (r.raw === null) {
+        // om timestampen inte gick att tolka – fallback
+        ts = new Date();
+      } else {
+        // Skala om: skillnaden i "råttid" → skillnad i verklig tid
+        // Ex:
+        //  - maxRaw = 10000
+        //  - r.raw  =  8000  →  r är 2000 "enheter" äldre
+        //  Då blir tiden: nu - 2000 ms (om enheterna är ms)
+        ts = new Date(now - (maxRaw - r.raw));
+      }
+
+      measurements.push({
+        timestamp: ts,
+        userId: r.userId,
+        value: r.value
+      });
+    });
+  }
+
+  // --- Active user ---
+  activeUserId = data.activeUserId || "";
+
+  // --- UI rebuild ---
+  rebuildUserSelects();
+  rebuildMeasurementTable();
+  rebuildChartFromState();
+  updateStats();
+
+  if (prevSelected && users.some(u => u.id === prevSelected)) {
+    selectedUserId = prevSelected;
+    userSelect.value = prevSelected;
+  }
+  updateUserStats();
+
+  // --- Live-ruta ---
+  if (measurements.length > 0) {
+    const last = measurements[measurements.length - 1];
+    const u = getUserById(last.userId);
+    liveValueEl.textContent = last.value.toFixed(3) + "‰";
+    liveMetaEl.textContent = `Senaste: ${formatTime(last.timestamp)} • ${u ? u.name : "Okänd"}`;
+  } else {
+    liveValueEl.textContent = "–";
+    liveMetaEl.textContent = "Ingen mätning ännu";
+  }
+}
+
+
+
+    function connectWs() {
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      ws = new WebSocket(proto + "://" + location.host + "/ws");
+
+      ws.onopen = () => {
+        console.log("WebSocket ansluten");
+      };
+
+      ws.onmessage = (ev) => {
+  try {
+    const data = JSON.parse(ev.data);
+
+    // --- STATE UPDATE ---
+    if (data.type === "state") {
+      handleStateMessage(data);
+    }
+
+    // --- BATTERY UPDATE ---
+    if (data.type === "battery") {
+      const pct = Math.round(data.percent);
+      document.getElementById("battery-status").textContent =
+        `ESP32-S3 • ${pct}%`;
+    }
+
+  } catch (e) {
+    console.warn("Felaktigt WS-meddelande:", e);
+  }
+};
+
+
+      ws.onclose = () => {
+        console.warn("WebSocket stängd, försöker igen...");
+        setTimeout(connectWs, 2000);
+      };
+
+      ws.onerror = () => {
+        console.warn("WebSocket error");
+        ws.close();
+      };
+    }
+
+    userSelect.addEventListener("change", () => {
+      selectedUserId = userSelect.value;
+      updateUserStats();
+    });
+
+    addUserBtn.addEventListener("click", () => {
+      const name = newUserNameInput.value.trim();
+      const color = newUserColorInput.value;
+      if (!name) {
+        alert("Skriv ett namn.");
+        return;
+      }
+      const newUser = {
+        id: "user-" + Date.now() + "-" + Math.floor(Math.random() * 1000),
+        name,
+        color
+      };
+      if (!wsSend({ type: "add_user", user: newUser })) return;
+      newUserNameInput.value = "";
+    });
+
+    setActiveUserBtn.addEventListener("click", () => {
+      const id = activeUserSelect.value;
+      if (!id) {
+        alert("Välj en aktiv användare.");
+        return;
+      }
+      if (!wsSend({ type: "set_active_user", activeUserId: id })) return;
+    });
+
+    testMeasureBtn.addEventListener("click", () => {
+      const val = Math.random() * 1.2;
+      if (!activeUserId) {
+        alert("Ingen aktiv användare är vald.");
+        return;
+      }
+      wsSend({
+        type: "add_measurement",
+        value: val,
+        timestamp: new Date().toISOString()
+      });
+    });
+
+    toggleAdminBtn.addEventListener("click", () => {
+      adminPanelEl.classList.toggle("visible");
+    });
+
+    adminConfirmBtn.addEventListener("click", () => {
+      if (adminPasswordInput.value === ADMIN_PASSWORD) {
+        adminActionsEl.style.display = "block";
+        adminStatusEl.textContent = "Adminläge aktivt.";
+      } else {
+        adminActionsEl.style.display = "none";
+        adminStatusEl.textContent = "Fel lösenord.";
+      }
+    });
+
+    clearDataBtn.addEventListener("click", () => {
+      if (!confirm("Rensa ALL logg på ESP och i UI?")) return;
+      wsSend({ type: "clear_all" });
+    });
+
+    downloadEspAllBtn.addEventListener("click", () => {
+      downloadCsv(null, "alkomatare_logg");
+    });
+
+    downloadEspFilteredBtn.addEventListener("click", () => {
+      const ids = Array.from(adminUserFiltersEl.querySelectorAll("input[type=checkbox]:checked"))
+        .map(cb => cb.value);
+      if (ids.length === 0) {
+        alert("Välj minst en användare.");
+        return;
+      }
+      downloadCsv(ids, "alkomatare_logg_filtrerad");
+    });
+
+    connectWs();
+  </script>
+</body>
+</html>
 
