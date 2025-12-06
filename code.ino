@@ -7,731 +7,702 @@
 #include <Wire.h>
 #include <U8g2lib.h>
 #include <Adafruit_MAX1704X.h>
+#include <freertos/semphr.h>
 
-Adafruit_MAX17048 battery;
+// --- Configuration Constants ---
+const char* WIFI_SSID = "ESP32S3";
+const char* WIFI_PASS = "12345678";
 
-// --- RGB LED Pins (ändra till dina pins) ---
-const int RED_PIN = A0;
-const int GREEN_PIN = A1;
-const int BLUE_PIN = A2;
-const int alk_pin = 5;
-const int temp_pin = 9;
-const int mic_pin = 10;
-const int knapp_pin = A4;
-const int vib_Pin = A3;
-const int buzz_pin = 6;
-const int sda = SDA;
-const int scl = SCL;
+// Pin Definitions (ESP32-S3 specific recommended, verify with your board)
+const int PIN_RED   = A0; // Verify if using ADC pins or GPIO numbers. On S3, A0 is typically GPIO1.
+const int PIN_GREEN = A1;
+const int PIN_BLUE  = A2;
+const int PIN_VIB   = A3;
+const int PIN_BUTTON= A4; // Used for wakeup
+const int PIN_ALCOHOL = 5;
+const int PIN_BUZZER  = 6;
+const int PIN_TEMP    = 9;
+const int PIN_MIC     = 10;
+const int PIN_SDA     = SDA;
+const int PIN_SCL     = SCL;
 
+// Sensor Constants
 const float VREF_S3 = 3.3;        
 const int ADC_MAX_S3 = 4095;
-const float MV_PER_PPM = 0.88;    // mV/ppm Justera efter behov
-const int Voffset = 1820; // Offset på alkoholsensorn i bitspänning
+const float MV_PER_PPM = 0.88;    // mV/ppm - Adjust as needed
+const int VOFFSET = 1820;         // Sensor offset in raw ADC
 
-// Mätsekvens
-bool hoppa=false;
-bool hoppatwo=false;
-unsigned long hopptid;
+// Timing Constants
+const unsigned long INACTIVITY_TIMEOUT_MS = 180000; // 3 minutes
+const unsigned long BUTTON_HOLD_TIME_MS = 3000;     // 3 seconds
+const int MIC_THRESHOLD = 1500;
+const int BLOW_TIME_REQUIRED_MS = 6000;
+const int BLOW_INTERRUPTION_TOLERANCE_MS = 250;
 
-// Reset state
-bool resetActive = false;
-unsigned long resetStartTime = 0;
-int resetBaseline = 0;
-int resetTolerance = 0;
-unsigned long resetTimeoutMs = 0;
+// Files
+const char* FILE_USERS       = "/users.json";
+const char* FILE_MEASUREMENTS= "/measurements.json";
+const char* FILE_ACTIVE_USER = "/active.txt";
 
-// Konstanter för deep sleep hantering
-const unsigned long INACTIVITY_TIMEOUT = 180000;  // 3 minuter i millisekunder
-const unsigned long BUTTON_HOLD_TIME = 3000;      // 3 sekunder
-unsigned long lastActivityTime = 0;
-unsigned long buttonPressStartTime = 0;
-bool buttonWasPressed = false;
-unsigned long lastBattSend = 0;
-
-int thresh_mic=1500;
-char* utskrift;
+// --- Global Objects ---
+Adafruit_MAX17048 battery;
 U8G2_SH1106_128X64_NONAME_F_HW_I2C display(U8G2_R0, U8X8_PIN_NONE);
-unsigned long starttime = 0;
-unsigned long villkor = 0;
-
-// Loop
-bool visat = false;
-
-// Vib
-bool vibRun = false;
-unsigned long t0;
-int stepCount;
-
-// --- Server ---
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
 
-// --- WiFi ---
-const char* ssid = "ESP32S3";
-const char* password = "12345678";
+// Mutex for JSON state thread safety
+SemaphoreHandle_t jsonMutex;
 
-// --- Filer ---
-const char* USERS_FILE      = "/users.json";
-const char* MEASURE_FILE    = "/measurements.json";
-const char* ACTIVEUSER_FILE = "/active.txt";
+// --- Application State ---
+struct AppState {
+    String usersJson = "[]";
+    String measurementsJson = "[]";
+    String activeUserId = "";
+    unsigned long lastActivityTime = 0;
+    unsigned long lastBattSend = 0;
+} appState;
 
-// --- State i RAM ---
-String usersJson        = "[]";
-String measurementsJson = "[]";
-String activeUserId     = "";
-
-
-bool updateSensorReset(int pin) {
-  if (!resetActive) return false;
-
-  int v = analogRead(pin);
-
-  // Är vi nära baseline?
-  if (abs(v - resetBaseline) <= resetTolerance) {
-    resetActive = false;
-    Serial.printf("Sensor reset OK! ADC=%d (baseline=%d)\n", v, resetBaseline);
-    return true;
-  }
-
-  // Timeout?
-  if (millis() - resetStartTime >= resetTimeoutMs) {
-    resetActive = false;
-    Serial.printf("Sensor reset TIMEOUT! Fast på ADC=%d\n", v);
-    return true;
-  }
-
-  static unsigned long lastDebug = 0;
-  if (millis() - lastDebug > 500) {
-    lastDebug = millis();
-    Serial.printf("Väntar på sensor-reset... ADC=%d (mål:%d)\n", v, resetBaseline);
-  }
-
-  return false;
-}
-
-void startSensorReset(int baseline, int tolerance = 30, unsigned long timeout = 8000) {
-  resetActive = true;
-  resetStartTime = millis();
-  resetBaseline = baseline;
-  resetTolerance = tolerance;
-  resetTimeoutMs = timeout;
-
-  rita("RESET...");
-  Serial.println("Startar sensor-reset...");
-}
-
-void startVibration() {
-  vibRun = true;
-  t0 = millis();
-  stepCount = 0;
-  digitalWrite(vib_Pin, HIGH);
-}
-
-void updateVibration() {
-  if (!vibRun) return;
-
-  if (millis() - t0 >= 100) {
-    t0 = millis();
-    stepCount++;
-
-    digitalWrite(vib_Pin, stepCount % 2 == 0 ? HIGH : LOW);
-
-    if (stepCount >= 6) {
-      vibRun = false;
-      digitalWrite(vib_Pin, LOW);
-    }
-  }
-}
-
-float Promille(int rawValue) {
-  float voltage = ((rawValue-Voffset) * VREF_S3) / ADC_MAX_S3;   
-  float mV = voltage * 1000.0;
-  float ppm = mV / MV_PER_PPM;
-  float promille = ppm / 450.0;
-  promille = round(promille * 10.0) / 10.0;
-  if (promille < 0) promille = 0;
-
-  return promille;
-}
-
+// Helper to update activity timestamp
 void updateActivity() {
-  lastActivityTime = millis();
+    appState.lastActivityTime = millis();
 }
 
-void rita(const String& text){
-  display.clearBuffer();
-  int width = display.getStrWidth(text.c_str());
-  int len = (128 - width) / 2;
-  display.drawStr(len, 50, text.c_str());
-  display.sendBuffer();
+// --- Display Helper ---
+void drawText(const String& text) {
+    display.clearBuffer();
+    // Centering logic
+    int width = display.getStrWidth(text.c_str());
+    int x = (128 - width) / 2;
+    // Assuming height is roughly 64, draw at y=50
+    display.drawStr(x, 50, text.c_str());
+    display.sendBuffer();
 }
 
-
-void enterDeepSleep() {
-  Serial.println("Går in i deep sleep...");
-  
-  // Släck RGB LED
-  setRGBColor(0, 0, 0);
-  
-  // Rensa display
-  rita("Zzz...");
-
-  delay(1000);  // Visa meddelande 1 sekund
-  display.clear();
-  
-  // Stäng av WiFi för att spara ström
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_OFF);
-  
-  // Konfigurera wake-up på knapp (A5 som EXT1)
-  // EXT0 vaknar på LOW (knapp nedtryckt)
-  esp_sleep_enable_ext1_wakeup(1ULL << knapp_pin, ESP_EXT1_WAKEUP_ALL_LOW);
-  
-  Serial.println("Deep sleep aktiverad. Tryck knapp för att väcka.");
-  delay(100);
-
-  // Gå in i deep sleep
-  esp_deep_sleep_start();
-}
-
-void checkDeepSleep() {
-  bool buttonPressed = (digitalRead(knapp_pin) == LOW);
-
-  // Knapp just nedtryckt
-  if (buttonPressed && !buttonWasPressed) {
-    buttonPressStartTime = millis();
-    updateActivity();
-    buttonWasPressed = true;
-  }
-
-  // Knappen fortfarande nedtryckt
-  if (buttonPressed && buttonWasPressed) {
-    // HÅLLT INNE → deep sleep
-    if (millis() - buttonPressStartTime >= BUTTON_HOLD_TIME) {
-      Serial.println("Knapp hållen i 3 sekunder - deep sleep");
-      enterDeepSleep();
-    }
-  }
-
-  // Knappen släppt → kort tryck
-  if (!buttonPressed && buttonWasPressed) {
-    unsigned long held = millis() - buttonPressStartTime;
-    buttonWasPressed = false;
-
-    if (held < BUTTON_HOLD_TIME) {
-      Serial.println("Kort knapptryck → visa batteri");
-      showBattery();
-    }
-  }
-
-  // Inaktivitet → deep sleep
-  if (millis() - lastActivityTime > INACTIVITY_TIMEOUT) {
-    Serial.println("Inaktiv i 3 minuter → deep sleep");
-    enterDeepSleep();
-  }
-}
-
-// Hantera uppvakning från deep sleep
-void handleWakeup() {
-  esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
-
-  switch (wakeup_reason) {
-
-    case ESP_SLEEP_WAKEUP_EXT1: {
-    rita("READY");
-    }
-    break;
-
-    default:
-      Serial.println("Normal start (ej från deep sleep)");
-      break;
-  }
-
-  // Återställ inaktivitetstid
-  updateActivity();
-}
-
-void sendMeasurementToWeb(float promilleValue) {
-  if (!activeUserId || activeUserId == "") {
-    Serial.println("Ingen aktiv användare - kan ej skicka mätning");
-    return;
-  }
-  
-  // Skapa mätningsobjekt med rå-timestamp (millis)
-  StaticJsonDocument<200> measurementDoc;
-  measurementDoc["type"] = "add_measurement";
-  measurementDoc["value"] = promilleValue;
-  measurementDoc["timestamp"] = millis();
-  measurementDoc["userId"] = activeUserId;
-  
-  // Serialisera till JSON-sträng
-  String jsonString;
-  serializeJson(measurementDoc, jsonString);
-  
-  // Skicka till alla anslutna WebSocket-klienter
-  ws.textAll(jsonString);
-  broadcastState();
-}
-
-void sendBatteryWS() {
-  float pct = battery.cellPercent();
-
-  StaticJsonDocument<100> doc;
-  doc["type"] = "battery";
-  doc["percent"] = pct;
-
-  String json;
-  serializeJson(doc, json);
-  ws.textAll(json);
+// --- RGB LED Control ---
+void setRGBColor(int r, int g, int b) {
+    // Common anode or cathode? Original code used (255 - r), implies Common Anode.
+    ledcWrite(PIN_RED, 255 - r);
+    ledcWrite(PIN_GREEN, 255 - g);
+    ledcWrite(PIN_BLUE, 255 - b);
 }
 
 void setupRGB() {
-  ledcAttach(RED_PIN, 5000, 8);   // Pin, frekvens, resolution
-  ledcAttach(GREEN_PIN, 5000, 8);
-  ledcAttach(BLUE_PIN, 5000, 8);
-  setRGBColor(255, 255, 255);
+    // ESP32 Arduino Core 3.x syntax
+    if (!ledcAttach(PIN_RED, 5000, 8)) Serial.println("Failed to attach RED pin");
+    if (!ledcAttach(PIN_GREEN, 5000, 8)) Serial.println("Failed to attach GREEN pin");
+    if (!ledcAttach(PIN_BLUE, 5000, 8)) Serial.println("Failed to attach BLUE pin");
+    setRGBColor(0, 0, 0);
 }
 
-void setRGBColor(int r, int g, int b) {
-  ledcWrite(RED_PIN, 255 - r);
-  ledcWrite(GREEN_PIN, 255 - g);
-  ledcWrite(BLUE_PIN, 255 - b);
-}
-
-// Konvertera hex-färg (#RRGGBB) till RGB-värden
 void setRGBFromHex(String hexColor) {
-  // Ta bort # om den finns
-  if (hexColor.startsWith("#")) {
-    hexColor = hexColor.substring(1);
-  }
-  
-  if (hexColor.length() < 6) {
-    setRGBColor(0, 0, 0);
-    return;
-  }
-
-  long number = strtol(hexColor.c_str(), NULL, 16);
-  int r = (number >> 16) & 0xFF;
-  int g = (number >> 8) & 0xFF;
-  int b = number & 0xFF;
-  
-  setRGBColor(r, g, b);
-  
-  Serial.printf("RGB LED: #%s -> R:%d G:%d B:%d\n", hexColor.c_str(), r, g, b);
-}
-
-// Uppdatera LED-färg baserat på aktiv användare
-void updateLEDForActiveUser() {
-  if (activeUserId == "") {
-    // Ingen aktiv användare - släck LED
-    setRGBColor(0, 0, 0);
-    Serial.println("RGB LED: Ingen aktiv användare, släcker LED");
-    return;
-  }
-  
-  // Hitta användarens färg
-  DynamicJsonDocument users(8192);
-  deserializeJson(users, usersJson);
-  
-  JsonArray arr = users.as<JsonArray>();
-  for (JsonObject user : arr) {
-    String id = user["id"] | "";
-    if (id == activeUserId) {
-      String color = user["color"] | "#000000";
-      setRGBFromHex(color);
-      Serial.printf("RGB LED: Aktiv användare: %s, färg: %s\n", 
-                    user["name"].as<String>().c_str(), 
-                    color.c_str());
-      return;
+    if (hexColor.startsWith("#")) {
+        hexColor = hexColor.substring(1);
     }
-  }
-  
-  // Användare hittades inte - släck LED
-  setRGBColor(0, 0, 0);
-  Serial.println("RGB LED: Användare ej hittad, släcker LED");
+    if (hexColor.length() < 6) {
+        setRGBColor(0, 0, 0);
+        return;
+    }
+    long number = strtol(hexColor.c_str(), NULL, 16);
+    int r = (number >> 16) & 0xFF;
+    int g = (number >> 8) & 0xFF;
+    int b = number & 0xFF;
+    setRGBColor(r, g, b);
 }
 
-// File helpers
+void updateLEDForActiveUser() {
+    if (xSemaphoreTake(jsonMutex, portMAX_DELAY)) {
+        String activeId = appState.activeUserId;
+        String usersStr = appState.usersJson;
+        xSemaphoreGive(jsonMutex);
+
+        if (activeId == "") {
+            setRGBColor(0, 0, 0);
+            return;
+        }
+
+        DynamicJsonDocument users(8192);
+        deserializeJson(users, usersStr);
+        JsonArray arr = users.as<JsonArray>();
+
+        bool found = false;
+        for (JsonObject user : arr) {
+            String id = user["id"] | "";
+            if (id == activeId) {
+                String color = user["color"] | "#000000";
+                setRGBFromHex(color);
+                found = true;
+                break;
+            }
+        }
+        if (!found) setRGBColor(0, 0, 0);
+    }
+}
+
+// --- File System Helpers ---
 String readFile(const char* path, const String& defVal = "[]") {
-  if (!LittleFS.exists(path)) return defVal;
-  File f = LittleFS.open(path, FILE_READ);
-  if (!f) return defVal;
-  String out = f.readString();
-  f.close();
-  out.trim();
-  if (out == "") return defVal;
-  return out;
+    if (!LittleFS.exists(path)) return defVal;
+    File f = LittleFS.open(path, FILE_READ);
+    if (!f) return defVal;
+    String out = f.readString();
+    f.close();
+    out.trim();
+    return (out == "") ? defVal : out;
 }
 
 void writeFile(const char* path, const String& data) {
-  File f = LittleFS.open(path, FILE_WRITE);
-  if (!f) return;
-  f.print(data);
-  f.close();
-}
-
-void writeActiveUser() {
-  File f = LittleFS.open(ACTIVEUSER_FILE, FILE_WRITE);
-  if (!f) return;
-  f.print(activeUserId);
-  f.close();
+    File f = LittleFS.open(path, FILE_WRITE);
+    if (f) {
+        f.print(data);
+        f.close();
+    }
 }
 
 void loadAllData() {
-  usersJson        = readFile(USERS_FILE, "[]");
-  measurementsJson = readFile(MEASURE_FILE, "[]");
-
-  if (LittleFS.exists(ACTIVEUSER_FILE)) {
-    File f = LittleFS.open(ACTIVEUSER_FILE, FILE_READ);
-    activeUserId = f.readString();
-    activeUserId.trim();
-    f.close();
-  } else {
-    activeUserId = "";
-  }
-  
-  // Uppdatera LED efter data laddats
-  updateLEDForActiveUser();
+    if (xSemaphoreTake(jsonMutex, portMAX_DELAY)) {
+        appState.usersJson = readFile(FILE_USERS, "[]");
+        appState.measurementsJson = readFile(FILE_MEASUREMENTS, "[]");
+        
+        if (LittleFS.exists(FILE_ACTIVE_USER)) {
+            File f = LittleFS.open(FILE_ACTIVE_USER, FILE_READ);
+            appState.activeUserId = f.readString();
+            appState.activeUserId.trim();
+            f.close();
+        } else {
+            appState.activeUserId = "";
+        }
+        xSemaphoreGive(jsonMutex);
+    }
+    updateLEDForActiveUser();
 }
 
-// WEBSOCKET BROADCAST
+// --- WebSocket Handling ---
 void broadcastState() {
-  DynamicJsonDocument users(8192);
-  DynamicJsonDocument meas(16384);
-  DynamicJsonDocument root(32768);
+    // Requires large buffers. Allocate on heap implicitly via DynamicJsonDocument
+    DynamicJsonDocument doc(32768); // Root
+    DynamicJsonDocument usersDoc(8192);
+    DynamicJsonDocument measDoc(16384);
 
-  deserializeJson(users, usersJson);
-  deserializeJson(meas, measurementsJson);
+    if (xSemaphoreTake(jsonMutex, portMAX_DELAY)) {
+        deserializeJson(usersDoc, appState.usersJson);
+        deserializeJson(measDoc, appState.measurementsJson);
+        
+        doc["type"] = "state";
+        doc["users"] = usersDoc.as<JsonArray>();
+        doc["measurements"] = measDoc.as<JsonArray>();
+        doc["activeUserId"] = appState.activeUserId;
+        xSemaphoreGive(jsonMutex);
 
-  root["type"] = "state";
-  root["users"] = users.as<JsonArray>();
-  root["measurements"] = meas.as<JsonArray>();
-  root["activeUserId"] = activeUserId;
-
-  String json;
-  serializeJson(root, json);
-  ws.textAll(json);
+        String json;
+        serializeJson(doc, json);
+        ws.textAll(json);
+    }
 }
 
-// WEBSOCKET HANDLER
 void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
                AwsEventType type, void *arg, uint8_t *data, size_t len) {
+    if (type == WS_EVT_CONNECT) {
+        broadcastState();
+        return;
+    }
+    if (type != WS_EVT_DATA) return;
 
-  if (type == WS_EVT_CONNECT) {
-    // Skicka state direkt
+    String msg = "";
+    for (size_t i = 0; i < len; i++) msg += (char)data[i];
+
+    DynamicJsonDocument doc(2048);
+    deserializeJson(doc, msg);
+    String t = doc["type"] | "";
+
+    if (xSemaphoreTake(jsonMutex, portMAX_DELAY)) {
+        if (t == "add_user") {
+            DynamicJsonDocument usersDoc(8192);
+            deserializeJson(usersDoc, appState.usersJson);
+            JsonArray arr = usersDoc.as<JsonArray>();
+            arr.add(doc["user"]);
+            
+            String newUsers;
+            serializeJson(arr, newUsers);
+            appState.usersJson = newUsers;
+            writeFile(FILE_USERS, newUsers);
+        }
+        else if (t == "set_active_user") {
+            appState.activeUserId = doc["activeUserId"].as<String>();
+            writeFile(FILE_ACTIVE_USER, appState.activeUserId);
+            // LED update needs to happen outside mutex if possible or carefully
+            // But we can just signal or let broadcast handle it? 
+            // Better to call updateLEDForActiveUser() later or here (but verify recursion/deadlock).
+            // updateLEDForActiveUser takes mutex, so we shouldn't call it while holding mutex.
+        }
+        else if (t == "add_measurement") {
+            DynamicJsonDocument measDoc(16384);
+            deserializeJson(measDoc, appState.measurementsJson);
+            JsonArray arr = measDoc.as<JsonArray>();
+            JsonObject m = arr.createNestedObject();
+            m["timestamp"] = millis();
+            m["userId"]    = appState.activeUserId;
+            m["value"]     = doc["value"];
+
+            String newMeas;
+            serializeJson(arr, newMeas);
+            appState.measurementsJson = newMeas;
+            writeFile(FILE_MEASUREMENTS, newMeas);
+        }
+        else if (t == "clear_all") {
+            appState.usersJson = "[]";
+            appState.measurementsJson = "[]";
+            appState.activeUserId = "";
+            writeFile(FILE_USERS, "[]");
+            writeFile(FILE_MEASUREMENTS, "[]");
+            writeFile(FILE_ACTIVE_USER, "");
+        }
+        xSemaphoreGive(jsonMutex);
+    }
+
+    if (t == "set_active_user" || t == "clear_all") {
+        updateLEDForActiveUser();
+    }
     broadcastState();
-    return;
-  }
-
-  if (type != WS_EVT_DATA) return;
-
-  String msg = "";
-  for (size_t i = 0; i < len; i++) msg += (char)data[i];
-
-  DynamicJsonDocument doc(2048);
-  deserializeJson(doc, msg);
-
-  String t = doc["type"] | "";
-
-  // ----------------------------------------
-  // add_user
-  // ----------------------------------------
-  if (t == "add_user") {
-    DynamicJsonDocument users(8192);
-    deserializeJson(users, usersJson);
-
-    JsonArray arr = users.as<JsonArray>();
-    arr.add(doc["user"]);
-
-    serializeJson(arr, usersJson);
-    writeFile(USERS_FILE, usersJson);
-
-    broadcastState();
-  }
-
-  // ----------------------------------------
-  // set_active_user
-  // ----------------------------------------
-  else if (t == "set_active_user") {
-    activeUserId = doc["activeUserId"].as<String>();
-    writeActiveUser();
-    
-    // Uppdatera LED-färg
-    updateLEDForActiveUser();
-    
-    broadcastState();
-  }
-
-  // ----------------------------------------
-  // add_measurement
-  // ----------------------------------------
-  else if (t == "add_measurement") {
-    DynamicJsonDocument meas(16384);
-    deserializeJson(meas, measurementsJson);
-    JsonArray arr = meas.as<JsonArray>();
-
-    JsonObject m = arr.createNestedObject();
-    m["timestamp"] = millis();
-    m["userId"]    = activeUserId;
-    m["value"]     = doc["value"];
-
-    serializeJson(arr, measurementsJson);
-    writeFile(MEASURE_FILE, measurementsJson);
-
-    broadcastState();
-  }
-
-  // ----------------------------------------
-  // clear_all
-  // ----------------------------------------
-  else if (t == "clear_all") {
-    usersJson = "[]";
-    measurementsJson = "[]";
-    activeUserId = "";
-
-    writeFile(USERS_FILE, usersJson);
-    writeFile(MEASURE_FILE, measurementsJson);
-    writeActiveUser();
-
-    // Släck LED när allt rensas
-    setRGBColor(0, 0, 0);
-
-    broadcastState();
-  }
 }
 
-// serverfile
-void serveFile(AsyncWebServerRequest *req, const char* path, const char* type) {
-  if (!LittleFS.exists(path)) {
-    req->send(404, "text/plain", "File not found");
-    return;
-  }
-  req->send(LittleFS, path, type);
+void sendBatteryWS() {
+    float pct = battery.cellPercent();
+    StaticJsonDocument<100> doc;
+    doc["type"] = "battery";
+    doc["percent"] = pct;
+    String json;
+    serializeJson(doc, json);
+    ws.textAll(json);
+}
+
+void sendMeasurementToWeb(float promilleValue) {
+    if (xSemaphoreTake(jsonMutex, portMAX_DELAY)) {
+        if (appState.activeUserId == "") {
+            Serial.println("No active user - cannot save measurement.");
+            xSemaphoreGive(jsonMutex);
+            return;
+        }
+        // Create a temporary doc to send the single event
+        StaticJsonDocument<200> eventDoc;
+        eventDoc["type"] = "add_measurement";
+        eventDoc["value"] = promilleValue;
+        eventDoc["timestamp"] = millis();
+        eventDoc["userId"] = appState.activeUserId;
+        
+        // Update local state storage as well (logic duplicated from onWsEvent for robustness)
+        DynamicJsonDocument measDoc(16384);
+        deserializeJson(measDoc, appState.measurementsJson);
+        JsonArray arr = measDoc.as<JsonArray>();
+        JsonObject m = arr.createNestedObject();
+        m["timestamp"] = millis();
+        m["userId"]    = appState.activeUserId;
+        m["value"]     = promilleValue;
+        
+        String newMeas;
+        serializeJson(arr, newMeas);
+        appState.measurementsJson = newMeas;
+        writeFile(FILE_MEASUREMENTS, newMeas);
+        
+        xSemaphoreGive(jsonMutex);
+
+        String jsonString;
+        serializeJson(eventDoc, jsonString);
+        ws.textAll(jsonString);
+        broadcastState();
+    }
+}
+
+// --- Sensor Logic ---
+class SensorStabilizer {
+private:
+    int sampleCount = 0;
+    long sum = 0;
+    int minV = 99999;
+    int maxV = -99999;
+    unsigned long lastSampleTime = 0;
+public:
+    void reset() {
+        sampleCount = 0;
+        sum = 0;
+        minV = 99999;
+        maxV = -99999;
+        lastSampleTime = 0;
+    }
+
+    bool update(int pin, int &meanOut) {
+        if (millis() - lastSampleTime < 4) return false;
+        lastSampleTime = millis();
+
+        int v = analogRead(pin);
+        sum += v;
+        if (v < minV) minV = v;
+        if (v > maxV) maxV = v;
+        sampleCount++;
+
+        if (sampleCount < 50) return false;
+
+        meanOut = sum / sampleCount;
+        int variation = maxV - minV;
+        
+        // Reset for next batch
+        sampleCount = 0; 
+        sum = 0; 
+        minV = 99999; 
+        maxV = -99999;
+
+        return (variation < 25);
+    }
+};
+
+SensorStabilizer alcoholSensor;
+
+class VibrationMotor {
+private:
+    bool running = false;
+    unsigned long startTime = 0;
+    int stepCount = 0;
+public:
+    void start() {
+        running = true;
+        startTime = millis();
+        stepCount = 0;
+        digitalWrite(PIN_VIB, HIGH);
+    }
+    void update() {
+        if (!running) return;
+        if (millis() - startTime >= 100) {
+            startTime = millis();
+            stepCount++;
+            digitalWrite(PIN_VIB, stepCount % 2 == 0 ? HIGH : LOW);
+            if (stepCount >= 6) {
+                running = false;
+                digitalWrite(PIN_VIB, LOW);
+            }
+        }
+    }
+};
+
+VibrationMotor vibMotor;
+
+class SensorResetManager {
+private:
+    bool active = false;
+    unsigned long startTime = 0;
+    int baseline = 0;
+    int tolerance = 0;
+    unsigned long timeout = 0;
+public:
+    void start(int _baseline, int _tolerance = 30, unsigned long _timeout = 8000) {
+        active = true;
+        startTime = millis();
+        baseline = _baseline;
+        tolerance = _tolerance;
+        timeout = _timeout;
+        drawText("RESET...");
+        Serial.println("Starting sensor reset...");
+    }
+    bool isActive() { return active; }
+    
+    bool update(int pin) {
+        if (!active) return false;
+        
+        int v = analogRead(pin);
+        if (abs(v - baseline) <= tolerance) {
+            active = false;
+            Serial.printf("Sensor reset OK! ADC=%d (baseline=%d)\n", v, baseline);
+            return true;
+        }
+        if (millis() - startTime >= timeout) {
+            active = false;
+            Serial.printf("Sensor reset TIMEOUT! ADC=%d\n", v);
+            return true;
+        }
+        return false;
+    }
+};
+
+SensorResetManager sensorReset;
+
+// --- Calculation ---
+float calculatePromille(int rawValue) {
+    float voltage = ((rawValue - VOFFSET) * VREF_S3) / ADC_MAX_S3;   
+    float mV = voltage * 1000.0;
+    float ppm = mV / MV_PER_PPM;
+    float promille = ppm / 450.0; // Conversion factor assumption
+    
+    promille = round(promille * 10.0) / 10.0;
+    if (promille < 0) promille = 0;
+    return promille;
+}
+
+// --- Deep Sleep & Power ---
+void enterDeepSleep() {
+    Serial.println("Entering deep sleep...");
+    setRGBColor(0, 0, 0);
+    drawText("Zzz...");
+    delay(1000);
+    display.clear();
+    
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+    
+    // ESP32-S3 Specific Wakeup
+    // 0 = Low Level
+    esp_deep_sleep_enable_gpio_wakeup(1ULL << PIN_BUTTON, ESP_GPIO_WAKEUP_GPIO_LOW);
+    
+    Serial.println("Deep sleep activated.");
+    delay(100);
+    esp_deep_sleep_start();
 }
 
 void showBattery() {
-  float percent = battery.cellPercent();
-  float voltage = battery.cellVoltage();
-  
-  updateActivity();
-
-  display.clearBuffer();
-  display.setFont(u8g2_font_logisoso28_tf);
-
-  String text = String((int)percent) + "%";
-  int w = display.getStrWidth(text.c_str());
-  int x = (128 - w) / 2;
-
-  display.drawStr(x, 40, text.c_str());
-  display.sendBuffer();
-
-  Serial.printf("Batteri: %.2f%%  (%.2f V)\n", percent, voltage);
-
-  delay(2000);   // Visa i 2 sekunder
-  display.clearBuffer();
-  display.sendBuffer();
+    updateActivity();
+    float percent = battery.cellPercent();
+    float voltage = battery.cellVoltage();
+    
+    display.clearBuffer();
+    display.setFont(u8g2_font_logisoso28_tf);
+    
+    String text = String((int)percent) + "%";
+    int w = display.getStrWidth(text.c_str());
+    int x = (128 - w) / 2;
+    display.drawStr(x, 40, text.c_str());
+    display.sendBuffer();
+    
+    Serial.printf("Battery: %.2f%% (%.2f V)\n", percent, voltage);
+    
+    // Blocking delay replaced by state machine? 
+    // For simplicity in this function, we keep delay but warn it blocks handling.
+    delay(2000); 
+    display.clearBuffer();
+    display.sendBuffer();
 }
 
-bool stabilSensor(int pin, int &meanOut) {
-  static int sampleCount = 0;
-  static long sum = 0;
-  static int minV = 99999;
-  static int maxV = -99999;
-  static unsigned long lastSampleTime = 0;
+void checkDeepSleepConditions() {
+    bool pressed = (digitalRead(PIN_BUTTON) == LOW);
+    
+    static bool initialized = false;
+    static bool ignoreCurrentPress = false;
+    static bool wasPressed = false;
+    static unsigned long pressStart = 0;
+    
+    // Initialize state on first run
+    if (!initialized) {
+        // If button is held during boot (e.g. used to wake up), ignore this press
+        // so it doesn't immediately count towards the shutdown timer.
+        if (pressed) {
+            ignoreCurrentPress = true;
+            wasPressed = true;
+        }
+        initialized = true;
+    }
 
-  if (millis() - lastSampleTime < 4) {
-    return false;  
-  }
-  lastSampleTime = millis();
-
-  int v = analogRead(pin);
-  sum += v;
-  if (v < minV) minV = v;
-  if (v > maxV) maxV = v;
-
-  sampleCount++;
-
-  // Inte klar än → fortsätt samla
-  if (sampleCount < 50) {
-    return false;
-  }
-
-  // Alla samples klara → räkna ut medel & variation
-  meanOut = sum / sampleCount;
-  int variation = maxV - minV;
-
-  sampleCount = 0;
-  sum = 0;
-  minV = 99999;
-  maxV = -99999;
-
-  return (variation < 25);
+    if (pressed) {
+        if (!wasPressed) {
+            // New press detected
+            pressStart = millis();
+            wasPressed = true;
+            ignoreCurrentPress = false; 
+            updateActivity();
+        }
+        
+        // If this is a valid new press (not the one from boot)
+        if (!ignoreCurrentPress) {
+            // Check for long hold -> Deep Sleep
+            if (millis() - pressStart >= BUTTON_HOLD_TIME_MS) {
+                enterDeepSleep();
+            }
+        }
+    } else {
+        // Button released
+        if (wasPressed) {
+            // It was pressed, now released
+            if (!ignoreCurrentPress) {
+                unsigned long held = millis() - pressStart;
+                if (held < BUTTON_HOLD_TIME_MS) {
+                    showBattery();
+                }
+            }
+            // Reset state
+            wasPressed = false;
+            ignoreCurrentPress = false; 
+        }
+    }
+    
+    if (millis() - appState.lastActivityTime > INACTIVITY_TIMEOUT_MS) {
+        enterDeepSleep();
+    }
 }
 
-void resetStabilSensor() {
-  // Tvinga fram en "reset" genom att anropa stabilSensor 
-  // tills den är klar med felaktiga data
-  int dummy;
-  for(int i = 0; i < 100; i++) {
-    stabilSensor(alk_pin, dummy);
-  }
-}
-
-// Setup
+// --- Setup ---
 void setup() {
-  Serial.begin(115200);
+    Serial.begin(115200);
+    
+    // Init Mutex
+    jsonMutex = xSemaphoreCreateMutex();
 
-  pinMode(alk_pin,INPUT);
-  pinMode(temp_pin,INPUT);lastActivityTime = millis();
-  handleWakeup();
-  pinMode(mic_pin,INPUT);
-  pinMode(knapp_pin,INPUT);
-  pinMode(vib_Pin,OUTPUT);
-  pinMode(buzz_pin,OUTPUT);
+    // Pins
+    pinMode(PIN_ALCOHOL, INPUT);
+    pinMode(PIN_TEMP, INPUT);
+    pinMode(PIN_MIC, INPUT);
+    pinMode(PIN_BUTTON, INPUT_PULLUP); // Usually needs pullup if active low
+    pinMode(PIN_VIB, OUTPUT);
+    pinMode(PIN_BUZZER, OUTPUT);
+    
+    // Reset activity timer
+    updateActivity();
+    
+    // Check wakeup
+    esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+    if (cause == ESP_SLEEP_WAKEUP_GPIO || cause == ESP_SLEEP_WAKEUP_EXT1) {
+        // Just woke up
+    }
 
-  resetStabilSensor();
+    // Init Logic
+    alcoholSensor.reset();
 
-  Wire.begin(sda,scl);
-
+    // Wire & Battery
+    Wire.begin(PIN_SDA, PIN_SCL);
     if (!battery.begin()) {
-  Serial.println("MAX17048 hittades inte!");
-  } else {
-  Serial.println("MAX17048 initierad!");
-  }
+        Serial.println("MAX17048 not found!");
+    } else {
+        Serial.println("MAX17048 init!");
+    }
 
-  display.begin();
-  display.clearBuffer();
-  const char* text = "READY";
-  int textWidth = display.getStrWidth(text);
-  int x = (128 - textWidth) / 2;
-  display.drawStr(x, 40, text);
-  display.sendBuffer();
+    // Display
+    display.begin();
+    display.clearBuffer();
+    // Font setup needed?
+    display.setFont(u8g2_font_ncenB14_tr); // Set a default font
+    drawText("READY");
 
+    // RGB
+    setupRGB();
 
-  // Initiera RGB LED
-  setupRGB();
-  Serial.println("RGB LED initierad");
+    // WiFi
+    WiFi.mode(WIFI_AP);
+    WiFi.softAP(WIFI_SSID, WIFI_PASS);
+    Serial.print("AP IP: ");
+    Serial.println(WiFi.softAPIP());
 
-  WiFi.mode(WIFI_AP);
-  WiFi.softAP(ssid, password);
-  Serial.println(WiFi.softAPIP());
+    // FS
+    LittleFS.begin(true);
+    loadAllData();
 
-  LittleFS.begin(true);
-  loadAllData();
+    // Server
+    server.on("/", HTTP_GET, [](AsyncWebServerRequest *req){
+        if(LittleFS.exists("/index.html")) req->send(LittleFS, "/index.html", "text/html");
+        else req->send(200, "text/plain", "Breathalyzer Ready (No index.html)");
+    });
+    server.on("/chart.min.js", HTTP_GET, [](AsyncWebServerRequest *req){
+        if(LittleFS.exists("/chart.min.js")) req->send(LittleFS, "/chart.min.js", "application/javascript");
+        else req->send(404);
+    });
+    server.on("/chart-adapter.min.js", HTTP_GET, [](AsyncWebServerRequest *req){
+        if(LittleFS.exists("/chart-adapter.min.js")) req->send(LittleFS, "/chart-adapter.min.js", "application/javascript");
+        else req->send(404);
+    });
+    server.on("/log/download", HTTP_GET, [](AsyncWebServerRequest *req){
+        req->send(LittleFS, FILE_MEASUREMENTS, "text/json");
+    });
 
-  // Static files
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *req){
-    serveFile(req, "/index.html", "text/html");
-  });
-  server.on("/chart.min.js", HTTP_GET, [](AsyncWebServerRequest *req){
-    serveFile(req, "/chart.min.js", "application/javascript");
-  });
-  server.on("/chart-adapter.min.js", HTTP_GET, [](AsyncWebServerRequest *req){
-    serveFile(req, "/chart-adapter.min.js", "application/javascript");
-  });
-
-  // CSV download
-  server.on("/log/download", HTTP_GET, [](AsyncWebServerRequest *req){
-    req->send(LittleFS, MEASURE_FILE, "text/json");
-  });
-
-  // WebSocket
-  ws.onEvent(onWsEvent);
-  server.addHandler(&ws);
-
-  server.begin();
-  Serial.println("Server startad");
+    ws.onEvent(onWsEvent);
+    server.addHandler(&ws);
+    server.begin();
+    Serial.println("Server started");
 }
+
+// --- Main Loop State ---
+bool isBlowing = false;
+bool isStabilizing = false;
+bool stabilizationStarted = false;
+unsigned long stabilizationStartTime = 0;
+unsigned long blowStartTime = 0;
+unsigned long lastGoodBlowTime = 0;
 
 void loop() {
+    checkDeepSleepConditions();
 
-  // Kolla deep sleep
-  checkDeepSleep();
-
-  // Skicka batteri var 10:e sekund
-  if (millis() - lastBattSend > 10000 && !hoppa) {
-    sendBatteryWS();
-    lastBattSend = millis();
-  }
-
-  int alk_value = analogRead(alk_pin);
-  int mic_value = analogRead(mic_pin);
-
-  if (mic_value > thresh_mic && !visat && !hoppa) {
-    starttime = millis();
-    villkor = millis();
-    Serial.println("Blås upptäckt!");
-    updateActivity();
-    digitalWrite(buzz_pin, HIGH);
-    visat = true;
-  }
-
-  if (visat && !hoppa) {
-
-    if (mic_value > thresh_mic) {
-      villkor = millis();
+    // Battery Report
+    if (millis() - appState.lastBattSend > 10000 && !isStabilizing) {
+        sendBatteryWS();
+        appState.lastBattSend = millis();
     }
 
-    if ((millis() - villkor) > 250 && mic_value < thresh_mic) {
-      Serial.println("Mätning misslyckad!");
-      digitalWrite(buzz_pin, LOW);
-      visat = false;
+    int micVal = analogRead(PIN_MIC);
+
+    // 1. Detect Blow Start
+    if (micVal > MIC_THRESHOLD && !isBlowing && !isStabilizing) {
+        blowStartTime = millis();
+        lastGoodBlowTime = millis();
+        Serial.println("Blow detected!");
+        updateActivity();
+        digitalWrite(PIN_BUZZER, HIGH);
+        isBlowing = true;
     }
 
-    if (millis() - starttime >= 6000) {
-      Serial.println("Blåsning klar → stabiliserar sensor...");
-      digitalWrite(buzz_pin, LOW);
+    // 2. Monitor Blow
+    if (isBlowing && !isStabilizing) {
+        if (micVal > MIC_THRESHOLD) {
+            lastGoodBlowTime = millis();
+        }
 
-      startVibration();
-
-      hoppa = true;        
-      hoppatwo = false;    
-      visat = false;       
+        // Interruption check
+        if ((millis() - lastGoodBlowTime) > BLOW_INTERRUPTION_TOLERANCE_MS && micVal <= MIC_THRESHOLD) {
+            Serial.println("Measurement failed (Interrupted)!");
+            digitalWrite(PIN_BUZZER, LOW);
+            isBlowing = false;
+            drawText("RETRY");
+        }
+        // Completion check
+        else if (millis() - blowStartTime >= BLOW_TIME_REQUIRED_MS) {
+            Serial.println("Blow complete -> Stabilizing...");
+            digitalWrite(PIN_BUZZER, LOW);
+            vibMotor.start();
+            
+            isStabilizing = true;
+            stabilizationStarted = false;
+            isBlowing = false;
+        }
     }
-  }
 
-  if (hoppa) {
+    // 3. Stabilization & Measurement
+    if (isStabilizing) {
+        if (!stabilizationStarted) {
+            stabilizationStartTime = millis();
+            stabilizationStarted = true;
+            alcoholSensor.reset(); // Clear old buffer
+        }
 
-    if (!hoppatwo) {
-      hopptid = millis();
-      hoppatwo = true;
+        // Wait a moment (2s) before reading?
+        if (millis() - stabilizationStartTime < 2000) {
+             drawText("WAIT...");
+             // Continue loop to keep vibMotor updating
+        } else {
+            drawText("...");
+            int meanVal = 0;
+            if (alcoholSensor.update(PIN_ALCOHOL, meanVal)) {
+                Serial.printf("Sensor Stable! ADC: %d\n", meanVal);
+                float prom = calculatePromille(meanVal);
+                Serial.printf("Promille: %.2f\n", prom);
+
+                vibMotor.start();
+                drawText(String(prom, 1)); // Display with 1 decimal
+                sendMeasurementToWeb(prom);
+                
+                sensorReset.start(VOFFSET);
+                
+                isStabilizing = false;
+                stabilizationStarted = false;
+            } else {
+                // Waiting for sensor to stabilize
+            }
+        }
     }
 
-    if (millis() - hopptid < 2000) {
-      return;
+    vibMotor.update();
+
+    if (sensorReset.isActive() && sensorReset.update(PIN_ALCOHOL)) {
+        Serial.println("Sensor ready for next!");
+        drawText("READY");
     }
-
-    int medel = 0;
-    rita("...");
-
-    if (stabilSensor(alk_pin, medel)) {
-
-      Serial.printf("Sensor stabil! ADC:", medel);
-
-      float prom = Promille(medel);
-      Serial.printf("Promille:", prom);
-
-      startVibration();
-      rita(String(prom));
-      sendMeasurementToWeb(prom);
-      startSensorReset(Voffset);
-
-      hoppa = false;
-      hoppatwo = false;
-      visat = false;
-
-    } else {
-      Serial.printf("Sensor ej stabil ännu...");
-    }
-  }
-
-  updateVibration();
-
-  if (resetActive && updateSensorReset(alk_pin)) {
-    Serial.println("Sensorn är redo för nästa mätning!");
-    rita("READY");
-  }
 }
-
-
-
