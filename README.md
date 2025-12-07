@@ -7,7 +7,7 @@ The objective was to design a system combining both analog and digital electroni
 We chose to build a breathalyzer, since it integrates these domains well:
 - A fuel-cell ethanol sensor requiring analog amplification and conditioning  
 - A microphone airflow detector 
-- An ESP32-S3 microcontroller handling UI, timing, measurements, WiFi, and dta storage  
+- An ESP32-S3 microcontroller handling UI, measurements, WiFi, digital signals, and data storage  
 
 The final system is a battery-powered, WiFi-enabled breathalyzer with OLED display, Web dashboard, and data logging.
 
