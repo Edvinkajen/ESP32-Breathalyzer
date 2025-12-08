@@ -392,7 +392,7 @@ private:
 	int tolerance = 0;
 	unsigned long timeout = 0;
 public:
-	void start(int _baseline, int _tolerance = 30, unsigned long _timeout = 8000) {
+	void start(int _baseline, int _tolerance = 30, unsigned long _timeout = 90000) {
 		active = true;
 		startTime = millis();
 		baseline = _baseline;
