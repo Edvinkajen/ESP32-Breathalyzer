@@ -30,7 +30,7 @@ const int PIN_SCL 	= SCL;
 const float VREF_S3 = 3.3; 			
 const int ADC_MAX_S3 = 4095;
 const float MV_PER_PPM = 0.88; 	 // mV/ppm - Adjust as needed
-const int VOFFSET = 1820; 			 // Sensor offset in raw ADC
+const int VOFFSET = 1770; 			 // Sensor offset in raw ADC
 
 // Timing Constants
 const unsigned long INACTIVITY_TIMEOUT_MS = 180000; // 3 minutes
@@ -392,7 +392,7 @@ private:
 	int tolerance = 0;
 	unsigned long timeout = 0;
 public:
-	void start(int _baseline, int _tolerance = 30, unsigned long _timeout = 90000) {
+	void start(int _baseline, int _tolerance = 20, unsigned long _timeout = 90000) {
 		active = true;
 		startTime = millis();
 		baseline = _baseline;
@@ -404,6 +404,7 @@ public:
 	bool isActive() { return active; }
 	
 	bool update(int pin) {
+		updateActivity();
 		if (!active) return false;
 		
 		int v = analogRead(pin);
@@ -545,7 +546,7 @@ void setup() {
 	pinMode(PIN_ALCOHOL, INPUT);
 	pinMode(PIN_TEMP, INPUT);
 	pinMode(PIN_MIC, INPUT);
-	pinMode(PIN_BUTTON, INPUT_PULLUP); // Usually needs pullup if active low
+	pinMode(PIN_BUTTON, INPUT);
 	pinMode(PIN_VIB, OUTPUT);
 	pinMode(PIN_BUZZER, OUTPUT);
 	
@@ -637,7 +638,7 @@ void loop() {
 		lastGoodBlowTime = millis();
 		Serial.println("Blow detected!");
 		updateActivity();
-		analogWrite(PIN_BUZZER, 127);
+		analogWrite(PIN_BUZZER, 80);
 		isBlowing = true;
 	}
 
@@ -685,7 +686,6 @@ void loop() {
 				Serial.printf("Sensor Stable! ADC: %d\n", meanVal);
 				float prom = calculatePromille(meanVal);
 				Serial.printf("Promille: %.2f\n", prom);
-
 				vibMotor.start();
 				drawText(String(prom, 1)); // Display with 1 decimal
 				sendMeasurementToWeb(prom);
