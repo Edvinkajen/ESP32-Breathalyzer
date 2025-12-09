@@ -30,7 +30,7 @@ const int PIN_SCL 	= SCL;
 const float VREF_S3 = 3.3; 			
 const int ADC_MAX_S3 = 4095;
 const float MV_PER_PPM = 0.88; 	 // mV/ppm - Adjust as needed
-const int VOFFSET = 1770; 			 // Sensor offset in raw ADC
+const int VOFFSET = 1805; 			 // Sensor offset in raw ADC
 
 // Timing Constants
 const unsigned long INACTIVITY_TIMEOUT_MS = 180000; // 3 minutes
@@ -431,7 +431,7 @@ float calculatePromille(int rawValue) {
 	float ppm = mV / MV_PER_PPM;
 	float promille = ppm / 450.0; // Conversion factor assumption
 	
-	promille = round(promille * 10.0) / 10.0;
+	promille = round(promille * 100) / 100;
 	if (promille < 0) promille = 0;
 	return promille;
 }
