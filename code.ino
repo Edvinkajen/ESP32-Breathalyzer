@@ -354,7 +354,7 @@ public:
   }
 
   bool update(int pin, int &meanOut) {
-    if (millis() - lastSampleTime < 4) return false;
+    if (millis() - lastSampleTime < 50) return false;
     lastSampleTime = millis();
 
     int v = analogRead(pin);
@@ -363,7 +363,7 @@ public:
     if (v > maxV) maxV = v;
     sampleCount++;
 
-    if (sampleCount < 50) return false;
+    if (sampleCount < 25) return false;
 
     meanOut = sum / sampleCount;
     int variation = maxV - minV;
@@ -448,13 +448,56 @@ public:
 
 SensorResetManager sensorReset;
 
+float readTemperature(int pin) {
+  uint32_t voltage_mV = analogReadMilliVolts(pin);
+  
+  // MCP9700T: Vout = Tc * Ta + V0c
+  // V0c = 500mV (vid 0 grader)
+  // Tc = 10mV / grad C
+  float tempC = (voltage_mV - 500.0) / 10.0;
+  return tempC;
+}
+
+// --- Funktion med er Desmos-formel ---
+float getSensitivityFactor(float temp) {
+  // Er funktion från Desmos:
+  // y = 107.5777 - 17.37397 / 2^(x / 14.44597)
+  
+  // Konstanter
+  const float A = 107.5777;
+  const float B = 17.37397;
+  const float DIVISOR = 14.44597;
+
+  // Beräkna nämnaren: 2 upphöjt till (temp / 14.44597)
+  // I C++ använder vi pow(bas, exponent)
+  float denominator = pow(2.0, temp / DIVISOR);
+  
+  // Beräkna y (som är i procent, t.ex. 92.0)
+  float percent = A - (B / denominator);
+
+  // --- Säkerhetsspärrar (Clamping) ---
+  // Även om formeln är bra, vill vi inte att den ska ge 
+  // negativa värden eller extremvärden om hårdvaran flippar ur.
+  if (percent < 10.0) percent = 10.0;   // Aldrig mindre än 10% känslighet
+  if (percent > 150.0) percent = 150.0; // Aldrig mer än 150%
+
+  // Returnera som faktor (t.ex. 0.92 istället för 92.0)
+  return percent / 100.0;
+}
+
 // --- Calculation ---
 float calculatePromille(int rawValue) {
   float voltage = ((rawValue - VOFFSET) * VREF_S3) / ADC_MAX_S3;  
   float mV = voltage * 1000.0;
   float ppm = mV / MV_PER_PPM;
   float promille = ppm / 450.0; // Conversion factor assumption
-  
+
+  float Temp = readTemperature(PIN_TEMP);
+  float Factor = getSensitivityFactor(Temp);
+  Serial.printf("Temperatur: %.2f",Temp);
+  Serial.printf("Factor: %.2f",Factor);
+
+  promille = promille / Factor;
   promille = round(promille * 100) / 100;
   if (promille < 0) promille = 0;
   return promille;
@@ -640,6 +683,7 @@ void loop() {
     sendBatteryWS();
     appState.lastBattSend = millis();
   }
+
 
   int micVal = analogRead(PIN_MIC);
 
