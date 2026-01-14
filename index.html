@@ -677,9 +677,13 @@
 
                 <div class="admin-section">
                   <strong style="font-size:0.8rem;">Testmätning (debug)</strong>
-                  <p class="muted">Genererar en slumpad promille på aktiv användare.</p>
+                  <p class="muted">Lägg till en mätning på aktiv användare.</p>
+                  <div class="field-group">
+                    <label for="test-measure-value">Promillevärde</label>
+                    <input type="number" id="test-measure-value" placeholder="0.500" step="0.001" min="0" max="5" value="0.500" />
+                  </div>
                   <div class="btn-row">
-                    <button class="secondary" id="test-measure-btn">Testmätning</button>
+                    <button class="secondary" id="test-measure-btn">Lägg till testmätning</button>
                   </div>
                 </div>
 
@@ -809,6 +813,7 @@
     const downloadSessionCsvBtn = document.getElementById("download-session-csv-btn"); // (ej använd, men kan läggas till)
     const clearDataBtn = document.getElementById("clear-data-btn");
     const testMeasureBtn = document.getElementById("test-measure-btn");
+    const testMeasureValueInput = document.getElementById("test-measure-value");
     const setActiveUserBtn = document.getElementById("set-active-user-btn");
 
     const userStatsUserLabelEl = document.getElementById("user-stats-user-label");
@@ -855,7 +860,17 @@
         scales: {
           x: {
             type: "time",
-            time: { displayFormats: { second: "HH:mm:ss" } },
+            time: { 
+              displayFormats: { 
+                second: "HH:mm:ss",
+                minute: "HH:mm",
+                hour: "HH:mm",
+                day: "MMM d",
+                month: "MMM yyyy",
+                year: "yyyy"
+              },
+              tooltipFormat: "yyyy-MM-dd HH:mm:ss"
+            },
             ticks: { color: "#9ca3af" },
             grid: { color: "rgba(55,65,81,0.6)" }
           },
@@ -1117,87 +1132,60 @@
     }
 
     function handleStateMessage(data) {
-  const prevSelected = selectedUserId || userSelect.value;
+      const prevSelected = selectedUserId || userSelect.value;
 
-  // --- Users ---
-  users.length = 0;
-  (data.users || []).forEach(u => users.push(u));
+      // --- Users ---
+      users.length = 0;
+      (data.users || []).forEach(u => users.push(u));
 
-  // --- Measurements ---
-  measurements.length = 0;
+      // --- Measurements ---
+      measurements.length = 0;
 
-  // 1) Läs in råa mätningar med "rå"-timestamp från ESP
-  const rawList = (data.measurements || []).map(m => {
-    const tsRaw = Number(m.timestamp);     // t.ex. millisekunder/sekunder sedan start
-    return {
-      raw: isNaN(tsRaw) ? null : tsRaw,
-      userId: m.userId,
-      value: Number(m.value) || 0
-    };
-  });
+      (data.measurements || []).forEach(m => {
+        const tsRaw = Number(m.timestamp);
+        let ts;
+        if (isNaN(tsRaw) || tsRaw < 1000000000000) { 
+            if (tsRaw < 1000000000) {
+               ts = new Date();
+            } else {
+               ts = new Date(tsRaw);
+            }
+        } else {
+            ts = new Date(tsRaw);
+        }
 
-  if (rawList.length > 0) {
-    // 2) Hitta största råa tidsvärdet (senaste mätningen)
-    const validRaw = rawList.map(r => r.raw).filter(r => r !== null);
-    let maxRaw = 0;
-    if (validRaw.length > 0) {
-      maxRaw = Math.max(...validRaw);
-    }
-
-    // 3) Sätt "nu" som referens – senaste mätningen blir nu,
-    //    äldre mätningar sprids bakåt i tiden
-    const now = Date.now();
-
-    rawList.forEach(r => {
-      let ts;
-      if (r.raw === null) {
-        // om timestampen inte gick att tolka – fallback
-        ts = new Date();
-      } else {
-        // Skala om: skillnaden i "råttid" → skillnad i verklig tid
-        // Ex:
-        //  - maxRaw = 10000
-        //  - r.raw  =  8000  →  r är 2000 "enheter" äldre
-        //  Då blir tiden: nu - 2000 ms (om enheterna är ms)
-        ts = new Date(now - (maxRaw - r.raw));
-      }
-
-      measurements.push({
-        timestamp: ts,
-        userId: r.userId,
-        value: r.value
+        measurements.push({
+          timestamp: ts,
+          userId: m.userId,
+          value: Number(m.value) || 0
+        });
       });
-    });
-  }
 
-  // --- Active user ---
-  activeUserId = data.activeUserId || "";
+      measurements.sort((a, b) => a.timestamp - b.timestamp);
 
-  // --- UI rebuild ---
-  rebuildUserSelects();
-  rebuildMeasurementTable();
-  rebuildChartFromState();
-  updateStats();
+      activeUserId = data.activeUserId || "";
 
-  if (prevSelected && users.some(u => u.id === prevSelected)) {
-    selectedUserId = prevSelected;
-    userSelect.value = prevSelected;
-  }
-  updateUserStats();
+      rebuildUserSelects();
+      rebuildMeasurementTable();
+      rebuildChartFromState();
+      updateStats();
 
-  // --- Live-ruta ---
-  if (measurements.length > 0) {
-    const last = measurements[measurements.length - 1];
-    const u = getUserById(last.userId);
-    liveValueEl.textContent = last.value.toFixed(3) + "‰";
-    liveMetaEl.textContent = `Senaste: ${formatTime(last.timestamp)} • ${u ? u.name : "Okänd"}`;
-  } else {
-    liveValueEl.textContent = "–";
-    liveMetaEl.textContent = "Ingen mätning ännu";
-  }
-}
+      if (prevSelected && users.some(u => u.id === prevSelected)) {
+        selectedUserId = prevSelected;
+        userSelect.value = prevSelected;
+      }
+      updateUserStats();
 
-
+      if (measurements.length > 0) {
+        const last = measurements[measurements.length - 1];
+        const u = getUserById(last.userId);
+        liveValueEl.textContent = last.value.toFixed(3) + "‰";
+        liveMetaEl.textContent = `Senaste: ${formatTime(last.timestamp)} • ${u ? u.name : "Okänd"}`;
+      } else {
+        liveValueEl.textContent = "–";
+        liveMetaEl.textContent = "Ingen mätning ännu";
+      }
+    }
 
     function connectWs() {
       const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -1205,29 +1193,27 @@
 
       ws.onopen = () => {
         console.log("WebSocket ansluten");
+        wsSend({ type: "sync_time", timestamp: Date.now() });
       };
 
       ws.onmessage = (ev) => {
-  try {
-    const data = JSON.parse(ev.data);
+        try {
+          const data = JSON.parse(ev.data);
 
-    // --- STATE UPDATE ---
-    if (data.type === "state") {
-      handleStateMessage(data);
-    }
+          if (data.type === "state") {
+            handleStateMessage(data);
+          }
 
-    // --- BATTERY UPDATE ---
-    if (data.type === "battery") {
-      const pct = Math.round(data.percent);
-      document.getElementById("battery-status").textContent =
-        `ESP32-S3 • ${pct}%`;
-    }
+          if (data.type === "battery") {
+            const pct = Math.round(data.percent);
+            document.getElementById("battery-status").textContent =
+              `ESP32-S3 • ${pct}%`;
+          }
 
-  } catch (e) {
-    console.warn("Felaktigt WS-meddelande:", e);
-  }
-};
-
+        } catch (e) {
+          console.warn("Felaktigt WS-meddelande:", e);
+        }
+      };
 
       ws.onclose = () => {
         console.warn("WebSocket stängd, försöker igen...");
@@ -1271,7 +1257,11 @@
     });
 
     testMeasureBtn.addEventListener("click", () => {
-      const val = Math.random() * 1.2;
+      const val = parseFloat(testMeasureValueInput.value) || 0;
+      if (val < 0 || val > 5) {
+        alert("Ange ett värde mellan 0 och 5 promille.");
+        return;
+      }
       if (!activeUserId) {
         alert("Ingen aktiv användare är vald.");
         return;
