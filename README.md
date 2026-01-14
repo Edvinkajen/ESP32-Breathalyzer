@@ -1,4 +1,4 @@
-# 🍺 ESP32 Fuel-Cell Breathalyzer
+# ESP32 Fuel-Cell Breathalyzer
 
 A compact **ESP32-S3–based breathalyzer prototype** combining **analog front-end design**, **embedded firmware**, and **wireless data visualization**.
 
