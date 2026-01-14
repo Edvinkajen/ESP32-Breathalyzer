@@ -14,12 +14,12 @@
 const char* WIFI_SSID = "ESP32S3";
 const char* WIFI_PASS = "12345678";
 
-// Pin Definitions (ESP32-S3 specific recommended, verify with your board)
+// Pin Definitions
 const int PIN_RED   = A0; 
 const int PIN_GREEN = A1;
 const int PIN_BLUE  = A2;
 const int PIN_VIB   = A3;
-const int PIN_BUTTON = A4; // Used for wakeup
+const int PIN_BUTTON = A4; 
 const int PIN_ALCOHOL = 5;
 const int PIN_BUZZER  = 6;
 const int PIN_TEMP  = 9;
@@ -30,15 +30,15 @@ const int PIN_SCL   = SCL;
 // Sensor Constants
 const float VREF_S3 = 3.3;      
 const int ADC_MAX_S3 = 4095;
-const float MV_PER_PPM = 0.88;   // mV/ppm - Adjust as needed
-const int VOFFSET = 1805;        // Sensor offset in raw ADC
+const float MV_PER_PPM = 0.15;   
+const int VOFFSET = 1521;        
 
 // Timing Constants
-const unsigned long INACTIVITY_TIMEOUT_MS = 180000; // 3 minutes
-const unsigned long BUTTON_HOLD_TIME_MS = 3000;    // 3 seconds
+const unsigned long INACTIVITY_TIMEOUT_MS = 180000; 
+const unsigned long BUTTON_HOLD_TIME_MS = 3000;    
 const int MIC_THRESHOLD = 1500;
 const int BLOW_TIME_REQUIRED_MS = 6000;
-const int BLOW_INTERRUPTION_TOLERANCE_MS = 250;
+const int BLOW_INTERRUPTION_TOLERANCE_MS = 400;
 
 // Files
 const char* FILE_USERS      = "/users.json";
@@ -51,7 +51,6 @@ U8G2_SH1106_128X64_NONAME_F_HW_I2C display(U8G2_R0, U8X8_PIN_NONE);
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
 
-// Mutex for JSON state thread safety
 SemaphoreHandle_t jsonMutex;
 
 // --- Application State ---
@@ -63,18 +62,16 @@ struct AppState {
   unsigned long lastBattSend = 0;
 } appState;
 
-// --- TIDS-LOGIK (NYTT) ---
-// Lagrar skillnaden mellan webbläsarens tid och millis()
-int64_t systemTimeOffset = 0; 
+// Framåtdeklaration av variabler som används i deep sleep check
+extern bool isStabilizing; 
 
-// Hjälpfunktion för att få riktig tid (Epoch ms)
+// --- TIDS-LOGIK ---
+int64_t systemTimeOffset = 0; 
 uint64_t getEpochTime() {
-  if (systemTimeOffset == 0) return millis(); // Fallback om ingen sync skett
+  if (systemTimeOffset == 0) return millis(); 
   return (uint64_t)(systemTimeOffset + millis());
 }
-// -------------------------
 
-// Helper to update activity timestamp
 void updateActivity() {
   appState.lastActivityTime = millis();
 }
@@ -82,25 +79,21 @@ void updateActivity() {
 // --- Display Helper ---
 void drawText(const String& text) {
   display.clearBuffer();
-  // Centering logic
   display.setFont(u8g2_font_logisoso28_tf);
   int width = display.getStrWidth(text.c_str());
   int x = (128 - width) / 2;
-  // Assuming height is roughly 64, draw at y=50
   display.drawStr(x, 50, text.c_str());
   display.sendBuffer();
 }
 
 // --- RGB LED Control ---
 void setRGBColor(int r, int g, int b) {
-  // Common anode or cathode? Original code used (255 - r), implies Common Anode.
   ledcWrite(PIN_RED, 255 - r);
   ledcWrite(PIN_GREEN, 255 - g);
   ledcWrite(PIN_BLUE, 255 - b);
 }
 
 void setupRGB() {
-  // ESP32 Arduino Core 3.x syntax
   if (!ledcAttach(PIN_RED, 5000, 8)) Serial.println("Failed to attach RED pin");
   if (!ledcAttach(PIN_GREEN, 5000, 8)) Serial.println("Failed to attach GREEN pin");
   if (!ledcAttach(PIN_BLUE, 5000, 8)) Serial.println("Failed to attach BLUE pin");
@@ -190,7 +183,7 @@ void loadAllData() {
 
 // --- WebSocket Handling ---
 void broadcastState() {
-  DynamicJsonDocument doc(32768); // Root
+  DynamicJsonDocument doc(32768); 
   DynamicJsonDocument usersDoc(8192);
   DynamicJsonDocument measDoc(16384);
 
@@ -241,22 +234,18 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
       appState.activeUserId = doc["activeUserId"].as<String>();
       writeFile(FILE_ACTIVE_USER, appState.activeUserId);
     }
-    // --- NYTT: Hantera tidssynk från webbläsaren ---
     else if (t == "sync_time") {
       uint64_t browserTime = doc["timestamp"].as<uint64_t>();
       systemTimeOffset = browserTime - millis();
       Serial.printf("Time synced! Offset: %lld\n", systemTimeOffset);
     }
-    // ----------------------------------------------
-    else if (t == "add_measurement") { // Testmätning (knapp i Admin)
+    else if (t == "add_measurement") { 
       DynamicJsonDocument measDoc(16384);
       deserializeJson(measDoc, appState.measurementsJson);
       JsonArray arr = measDoc.as<JsonArray>();
       JsonObject m = arr.createNestedObject();
       
-      // ANVÄND getEpochTime() HÄR:
       m["timestamp"] = getEpochTime();
-      
       m["userId"]   = appState.activeUserId;
       m["value"]    = doc["value"];
 
@@ -300,25 +289,18 @@ void sendMeasurementToWeb(float promilleValue) {
       return;
     }
     
-    // Create a temporary doc to send the single event
     StaticJsonDocument<200> eventDoc;
     eventDoc["type"] = "add_measurement";
     eventDoc["value"] = promilleValue;
-    
-    // ANVÄND getEpochTime() HÄR:
     eventDoc["timestamp"] = getEpochTime();
-    
     eventDoc["userId"] = appState.activeUserId;
     
-    // Update local state storage as well
     DynamicJsonDocument measDoc(16384);
     deserializeJson(measDoc, appState.measurementsJson);
     JsonArray arr = measDoc.as<JsonArray>();
     JsonObject m = arr.createNestedObject();
     
-    // ANVÄND getEpochTime() HÄR OCKSÅ:
     m["timestamp"] = getEpochTime();
-    
     m["userId"]   = appState.activeUserId;
     m["value"]    = promilleValue;
     
@@ -336,45 +318,112 @@ void sendMeasurementToWeb(float promilleValue) {
   }
 }
 
-// --- Sensor Logic ---
 class SensorStabilizer {
 private:
-  int sampleCount = 0;
-  long sum = 0;
-  int minV = 99999;
-  int maxV = -99999;
-  unsigned long lastSampleTime = 0;
+  float filteredValue = 0;    
+  int peakValue = 0;          
+  int baseline = 0;           
+  unsigned long startTime = 0;
+  bool firstRun = true;       
+
+  // --- INSTÄLLNINGAR ---
+  const int OVERSAMPLE_COUNT = 64; 
+  const float FILTER_FACTOR = 0.1;   
+  const unsigned long MAX_MEASURE_TIME_MS = 20000; // Max tid vi letar peak
+  const int DROP_THRESHOLD_MV = 10;  
+
 public:
   void reset() {
-    sampleCount = 0;
-    sum = 0;
-    minV = 99999;
-    maxV = -99999;
-    lastSampleTime = 0;
+    peakValue = -9999; 
+    firstRun = true;
+    startTime = 0;
   }
 
-  bool update(int pin, int &meanOut) {
-    if (millis() - lastSampleTime < 50) return false;
-    lastSampleTime = millis();
+  int readMilliVoltsSmooth(int pin) {
+    long sum = 0;
+    for(int i = 0; i < OVERSAMPLE_COUNT; i++) {
+      sum += analogReadMilliVolts(pin); 
+    }
+    return (int)(sum / OVERSAMPLE_COUNT);
+  }
 
-    int v = analogRead(pin);
-    sum += v;
-    if (v < minV) minV = v;
-    if (v > maxV) maxV = v;
-    sampleCount++;
+  // Returnerar true när mätningen är KLAR.
+  bool update(int pin, float &promilleOut) {
+    int currentMv = readMilliVoltsSmooth(pin);
 
-    if (sampleCount < 25) return false;
+    // 1. Initiera vid första körningen
+    if (firstRun) {
+      filteredValue = currentMv;
+      
+      // HÄR ÄR ÄNDRINGEN FÖR FAST NOLLVÄRDE:
+      // Vi använder VOFFSET (1805) men konverterar det till millivolt
+      // så det stämmer med analogReadMilliVolts.
+      // (1805 / 4095) * 3300mV ≈ 1454 mV
+      baseline = VOFFSET;
 
-    meanOut = sum / sampleCount;
-    int variation = maxV - minV;
+      // Om du hellre vill skriva in mV direkt i VOFFSET, ta bort raden ovan 
+      // och kör: baseline = VOFFSET;
+      
+      peakValue = currentMv; // Starta peak-jakten från nuvarande nivå
+      startTime = millis();
+      firstRun = false;
+      Serial.printf("Analysis Started. Fixed Baseline: %d mV (Current: %d mV)\n", baseline, currentMv);
+    }
+
+    // 2. Filtrera signalen
+    filteredValue = (filteredValue * (1.0 - FILTER_FACTOR)) + (currentMv * FILTER_FACTOR);
+    int smoothedMv = (int)filteredValue;
+
+    // 3. Hitta Maxvärdet (Peak Hold)
+    if (smoothedMv > peakValue) {
+      peakValue = smoothedMv;
+    }
+
+    // Debuggraf
+    Serial.printf("Raw:%d,Smooth:%d,Peak:%d,Base:%d\n", currentMv, smoothedMv, peakValue, baseline);
+
+    // 4. Är vi klara?
+    unsigned long timeElapsed = millis() - startTime;
+    bool isDone = false;
+
+    // A. "Early Exit": Har värdet vänt tydligt neråt från toppen?
+    // Vi kollar bara detta om peaken faktiskt är högre än vår fasta baslinje
+    if (timeElapsed > 1000 && (peakValue > baseline + 10) && (smoothedMv < peakValue - DROP_THRESHOLD_MV)) {
+      Serial.println(">>> Peak found (Drop detected) <<<");
+      isDone = true;
+    }
     
-    // Reset for next batch
-    sampleCount = 0; 
-    sum = 0; 
-    minV = 99999; 
-    maxV = -99999;
+    // B. "Timeout": Har tiden gått ut? 
+    if (timeElapsed >= MAX_MEASURE_TIME_MS) {
+      Serial.println(">>> Timeout reached - taking max value found <<<");
+      isDone = true;
+    }
 
-    return (variation < 25);
+    // 5. Beräkna resultat
+    if (isDone) {
+      // Räkna ut delta mot det FASTA nollvärdet
+      float voltageDelta = (float)(peakValue - baseline);
+      
+      // Om sensorn ligger under det fasta värdet (drift), sätt till 0
+      if (voltageDelta < 0) voltageDelta = 0;
+
+      float ppm = voltageDelta / MV_PER_PPM; 
+      float calculatedPromille = ppm / 450.0; 
+
+      // Temperaturkompensering
+      float temp = readTemperature(PIN_TEMP);
+      float factor = getSensitivityFactor(temp);
+      calculatedPromille = calculatedPromille / factor;
+      
+      promilleOut = round(calculatedPromille * 100.0) / 100.0;
+      if (promilleOut < 0) promilleOut = 0;
+
+      Serial.printf("RESULT: Peak: %d mV, Baseline: %d mV, Delta: %.1f mV -> %.2f Promille\n", 
+                    peakValue, baseline, voltageDelta, promilleOut);
+      return true;
+    }
+
+    return false;
   }
 };
 
@@ -450,47 +499,28 @@ SensorResetManager sensorReset;
 
 float readTemperature(int pin) {
   uint32_t voltage_mV = analogReadMilliVolts(pin);
-  
-  // MCP9700T: Vout = Tc * Ta + V0c
-  // V0c = 500mV (vid 0 grader)
-  // Tc = 10mV / grad C
   float tempC = (voltage_mV - 500.0) / 10.0;
   return tempC;
 }
 
-// --- Funktion med er Desmos-formel ---
 float getSensitivityFactor(float temp) {
-  // Er funktion från Desmos:
-  // y = 107.5777 - 17.37397 / 2^(x / 14.44597)
-  
-  // Konstanter
   const float A = 107.5777;
   const float B = 17.37397;
   const float DIVISOR = 14.44597;
-
-  // Beräkna nämnaren: 2 upphöjt till (temp / 14.44597)
-  // I C++ använder vi pow(bas, exponent)
   float denominator = pow(2.0, temp / DIVISOR);
-  
-  // Beräkna y (som är i procent, t.ex. 92.0)
   float percent = A - (B / denominator);
 
-  // --- Säkerhetsspärrar (Clamping) ---
-  // Även om formeln är bra, vill vi inte att den ska ge 
-  // negativa värden eller extremvärden om hårdvaran flippar ur.
-  if (percent < 10.0) percent = 10.0;   // Aldrig mindre än 10% känslighet
-  if (percent > 150.0) percent = 150.0; // Aldrig mer än 150%
+  if (percent < 10.0) percent = 10.0;
+  if (percent > 150.0) percent = 150.0;
 
-  // Returnera som faktor (t.ex. 0.92 istället för 92.0)
   return percent / 100.0;
 }
 
-// --- Calculation ---
 float calculatePromille(int rawValue) {
   float voltage = ((rawValue - VOFFSET) * VREF_S3) / ADC_MAX_S3;  
   float mV = voltage * 1000.0;
   float ppm = mV / MV_PER_PPM;
-  float promille = ppm / 450.0; // Conversion factor assumption
+  float promille = ppm / 450.0; 
 
   float Temp = readTemperature(PIN_TEMP);
   float Factor = getSensitivityFactor(Temp);
@@ -514,7 +544,6 @@ void enterDeepSleep() {
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
   
-  // ESP32-S3 Specific Wakeup
   esp_sleep_enable_ext1_wakeup(1ULL << PIN_BUTTON, ESP_EXT1_WAKEUP_ALL_LOW);
   
   Serial.println("Deep sleep activated.");
@@ -544,6 +573,10 @@ void showBattery() {
 }
 
 void checkDeepSleepConditions() {
+  // --- NYTT: Hindra sleep om vi stabiliserar sensorn ---
+  if (isStabilizing) return; 
+  // ---------------------------------------------------
+
   bool pressed = (digitalRead(PIN_BUTTON) == LOW);
   
   static bool initialized = false;
@@ -594,10 +627,8 @@ void checkDeepSleepConditions() {
 void setup() {
   Serial.begin(115200);
   
-  // Init Mutex
   jsonMutex = xSemaphoreCreateMutex();
 
-  // Pins
   pinMode(PIN_ALCOHOL, INPUT);
   pinMode(PIN_TEMP, INPUT);
   pinMode(PIN_MIC, INPUT);
@@ -605,19 +636,15 @@ void setup() {
   pinMode(PIN_VIB, OUTPUT);
   pinMode(PIN_BUZZER, OUTPUT);
   
-  // Reset activity timer
   updateActivity();
   
-  // Check wakeup
   esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
   if (cause == ESP_SLEEP_WAKEUP_GPIO || cause == ESP_SLEEP_WAKEUP_EXT1) {
     // Just woke up
   }
 
-  // Init Logic
   alcoholSensor.reset();
 
-  // Wire & Battery
   Wire.begin(PIN_SDA, PIN_SCL);
   if (!battery.begin()) {
     Serial.println("MAX17048 not found!");
@@ -625,26 +652,21 @@ void setup() {
     Serial.println("MAX17048 init!");
   }
 
-  // Display
   display.begin();
   display.clearBuffer();
   display.setFont(u8g2_font_logisoso28_tf);
   drawText("READY");
 
-  // RGB
   setupRGB();
 
-  // WiFi
   WiFi.mode(WIFI_AP);
   WiFi.softAP(WIFI_SSID, WIFI_PASS);
   Serial.print("AP IP: ");
   Serial.println(WiFi.softAPIP());
 
-  // FS
   LittleFS.begin(true);
   loadAllData();
 
-  // Server
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *req){
     if(LittleFS.exists("/index.html")) req->send(LittleFS, "/index.html", "text/html");
     else req->send(200, "text/plain", "Breathalyzer Ready (No index.html)");
@@ -676,85 +698,103 @@ unsigned long blowStartTime = 0;
 unsigned long lastGoodBlowTime = 0;
 
 void loop() {
+  // 1. Hantera strömsparläge och batterirapportering
   checkDeepSleepConditions();
 
-  // Battery Report
-  if (millis() - appState.lastBattSend > 10000 && !isStabilizing) {
+  // Skicka inte batteristatus mitt i en mätning (för att undvika WiFi-spikar på ADC)
+  if (millis() - appState.lastBattSend > 10000 && !isStabilizing && !isBlowing) {
     sendBatteryWS();
     appState.lastBattSend = millis();
   }
 
-
   int micVal = analogRead(PIN_MIC);
 
-  // 1. Detect Blow Start
+  // ---------------------------------------------------------
+  // 2. DETECT BLOW START
+  // ---------------------------------------------------------
   if (micVal > MIC_THRESHOLD && !isBlowing && !isStabilizing) {
     blowStartTime = millis();
     lastGoodBlowTime = millis();
     Serial.println("Blow detected!");
-    updateActivity();
-    analogWrite(PIN_BUZZER, 80);
+    
+    updateActivity(); // Håll enheten vaken
+    analogWrite(PIN_BUZZER, 80); // Starta summer
+    
     isBlowing = true;
   }
 
-  // 2. Monitor Blow
+  // ---------------------------------------------------------
+  // 3. MONITOR BLOW (Medan man blåser)
+  // ---------------------------------------------------------
   if (isBlowing && !isStabilizing) {
+    // Om ljudnivån är bra, uppdatera tidstämpeln
     if (micVal > MIC_THRESHOLD) {
       lastGoodBlowTime = millis();
     }
 
-    // Interruption check
+    // A. AVBROTT: Om man slutar blåsa för tidigt
     if ((millis() - lastGoodBlowTime) > BLOW_INTERRUPTION_TOLERANCE_MS && micVal <= MIC_THRESHOLD) {
       Serial.println("Measurement failed (Interrupted)!");
-      analogWrite(PIN_BUZZER, 0);
+      analogWrite(PIN_BUZZER, 0); // Stäng av summer
       isBlowing = false;
       drawText("RETRY");
+      delay(1000); 
+      drawText("READY");
     }
-    // Completion check
+    // B. SUCCÉ: Om man blåst tillräckligt länge
     else if (millis() - blowStartTime >= BLOW_TIME_REQUIRED_MS) {
       Serial.println("Blow complete -> Stabilizing...");
-      analogWrite(PIN_BUZZER, 0);
+      analogWrite(PIN_BUZZER, 0); // Stäng av summer
       
-      // Här vibrerar den när blåsningen är klar (fanns redan)
-      vibMotor.start();
+      vibMotor.start(); // Haptisk återkoppling att blåsningen är klar
       
       isStabilizing = true;
       stabilizationStarted = false;
       isBlowing = false;
+      
+      // VIKTIGT: Återställ sensorklassen inför analysen
+      alcoholSensor.reset(); 
     }
   }
 
-  // 3. Stabilization & Measurement
+  // ---------------------------------------------------------
+  // 4. STABILIZATION & MEASUREMENT (Analysfasen)
+  // ---------------------------------------------------------
   if (isStabilizing) {
+    updateActivity(); // Förhindra sleep
+
     if (!stabilizationStarted) {
       stabilizationStartTime = millis();
       stabilizationStarted = true;
-      alcoholSensor.reset(); // Clear old buffer
     }
 
-    if (millis() - stabilizationStartTime < 2000) {
+    // Ge sensorn en kort stund (ca 1-2 sek) för reaktionen att starta innan vi visar resultat
+    if (millis() - stabilizationStartTime < 1500) {
        drawText("WAIT...");
     } else {
       drawText("...");
-      int meanVal = 0;
-      if (alcoholSensor.update(PIN_ALCOHOL, meanVal)) {
-        Serial.printf("Sensor Stable! ADC: %d\n", meanVal);
-        float prom = calculatePromille(meanVal);
-        Serial.printf("Promille: %.2f\n", prom);
+      
+      // Här ligger den nya logiken!
+      float finalPromille = 0.0;
+      
+      // alcoholSensor.update returnerar true när peaken är hittad
+      if (alcoholSensor.update(PIN_ALCOHOL, finalPromille)) {
         
-        // --- HÄR STARTAR VI VIBRATIONEN FÖR RESULTATET ---
+        Serial.printf("Sensor Stable! Result: %.2f promille\n", finalPromille);
+        
+        // 1. Feedback
         vibMotor.start(); 
-        drawText(String(prom, 2)); 
-        sendMeasurementToWeb(prom);
+        drawText(String(finalPromille, 2)); // Visa med 2 decimaler
         
-        // --- FIX: Istället för delay(5000) använder vi en loop ---
-        // Detta gör att vibMotor.update() kan köras så den pulserar snyggt
+        // 2. Skicka till webb/app
+        sendMeasurementToWeb(finalPromille);
+        
+        // 3. Håll resultatet på skärmen i 5 sekunder
         unsigned long resultShowStart = millis();
         while(millis() - resultShowStart < 5000) {
-            vibMotor.update(); // Håll motorn levande
-            delay(10);         // Liten paus för stabilitet
+            vibMotor.update(); // Fortsätt driva vibratorn om den är igång
+            delay(10);         
         }
-        // --------------------------------------------------------
 
         sensorReset.start(VOFFSET);
         
@@ -764,10 +804,14 @@ void loop() {
     }
   }
 
+  // Uppdatera vibratorns status (måste köras varje loop)
   vibMotor.update();
 
-  if (sensorReset.isActive() && sensorReset.update(PIN_ALCOHOL)) {
-    Serial.println("Sensor ready for next!");
-    drawText("READY");
+  // Hantera återställning (Reset Manager)
+  if (sensorReset.isActive()) {
+    if (sensorReset.update(PIN_ALCOHOL)) {
+      Serial.println("Sensor ready for next!");
+      drawText("READY");
+    }
   }
 }
