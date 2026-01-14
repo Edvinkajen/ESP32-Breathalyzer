@@ -63,7 +63,7 @@ It is **not a certified measuring instrument**.
 
 ## Team
 
-- **Edvin Kajén**  
+- Edvin Kajén  
 - Simon Nilsson  
 - Sebastian Atterhall  
 - Linus Enstedt  
